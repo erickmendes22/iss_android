@@ -6,6 +6,7 @@
 #include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -161,24 +162,37 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
+    // Bachata's GPU buffer-cache GC bounds the number of evictions per pass.
+    // inFAMOUS streams much larger staging uploads and has a *different*
+    // sparse memory cache: do not copy that GC or its game-specific patches.
+    // Instead, bound the destructors of idle Vulkan staging allocations so
+    // hundreds of 16-MiB rings / large uploads cannot all be destroyed in a
+    // single frame. Keep their 3000-frame retention and GPU completion checks.
+#ifdef ISS_ANDROID_GLIBC
+    size_t remaining_deletions = 4; // 4 total, not 4 for each memory pool
+#else
+    size_t remaining_deletions = std::numeric_limits<size_t>::max();
+#endif
     for (Ring& ring : rings) {
-        TrimRing(ring);
+        TrimRing(ring, remaining_deletions);
     }
     for (auto& cache : large_caches) {
-        TrimLarge(cache);
+        TrimLarge(cache, remaining_deletions);
     }
     PublishStats();
 }
 
-void StagingBufferPool::TrimRing(Ring& ring) {
+void StagingBufferPool::TrimRing(Ring& ring, size_t& remaining_deletions) {
     auto& blocks = ring.blocks;
     for (size_t i = blocks.size(); i-- > 0;) {
+        if (remaining_deletions == 0) break;
         const Block& block = blocks[i];
         if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RING_IDLE_FRAMES ||
             !scheduler.IsFree(block.buffer->LastTick())) {
             continue;
         }
         blocks.erase(blocks.begin() + i);
+        --remaining_deletions;
         if (i < ring.current) {
             --ring.current;
         } else if (i == ring.current) {
@@ -190,10 +204,17 @@ void StagingBufferPool::TrimRing(Ring& ring) {
     }
 }
 
-void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
-    std::erase_if(cache, [this](const LargeBuffer& entry) {
-        return !entry.held && frame - entry.last_used_frame >= LARGE_IDLE_FRAMES &&
-               scheduler.IsFree(entry.tick);
+void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache,
+                                  size_t& remaining_deletions) {
+    if (remaining_deletions == 0) return;
+    std::erase_if(cache, [this, &remaining_deletions](const LargeBuffer& entry) {
+        if (remaining_deletions == 0 || entry.held ||
+            frame - entry.last_used_frame < LARGE_IDLE_FRAMES ||
+            !scheduler.IsFree(entry.tick)) {
+            return false;
+        }
+        --remaining_deletions;
+        return true;
     });
 }
 

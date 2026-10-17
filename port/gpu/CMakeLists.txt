@@ -508,4 +508,5 @@ target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
 if(ISS_ANDROID_GLIBC)
  target_link_libraries(tlggpu PRIVATE "${ISS_CPU_LIBRARY}")
+ target_compile_definitions(tlggpu PRIVATE ISS_ANDROID_GLIBC=1)
 endif()
