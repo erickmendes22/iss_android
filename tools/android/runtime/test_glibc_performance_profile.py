@@ -32,7 +32,7 @@ class PerformanceProfileTests(unittest.TestCase):
         self.assertNotIn("TLG_READBACK_LINEAR=1", SHELL)
 
     def test_clock_measurements_skip_disabled_diagnostics(self):
-        wait = TOGGLES.split("struct WaitTimer {", 1)[1].split("};", 1)[0]
+        wait = TOGGLES.split("struct WaitTimer {", 1)[1].split("\n};\n/// GPU thread rusage", 1)[0]
         self.assertIn("enabled ? std::chrono::steady_clock::now()", wait)
         self.assertIn("if (!enabled)", wait)
         self.assertIn("total.fetch_add", wait)
