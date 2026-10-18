@@ -10,7 +10,7 @@ INSTANCE = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_instance.cpp"
 class AutoBudgetTests(unittest.TestCase):
     def test_no_forced_gc_cap_in_android_glibc_launcher(self):
         self.assertNotIn('"ISS_GC_BUDGET_MB":', LAUNCH)
-        self.assertIn('"ISS_READBACKS": "2"', LAUNCH)
+        self.assertIn('"ISS_READBACKS": "1"', LAUNCH)
         self.assertIn('"ISS_DEFERRED_READBACK": "1"', LAUNCH)
     def test_driver_heap_budget_drives_integrated_gpu_thresholds(self):
         self.assertIn('const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();', CACHE)

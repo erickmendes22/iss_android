@@ -2,7 +2,7 @@ name: inFAMOUS Android glibc ARM64
 
 on:
   push:
-    branches: [android-glibc]
+    branches: [android-glibc, experimental-glibc-relaxed-readback]
     paths-ignore: ['**/*.md']
   workflow_dispatch:
 

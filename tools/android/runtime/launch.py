@@ -20,7 +20,7 @@ ISS_DEFAULTS = {
     # eviction/reupload. TextureCache already obtains the current
     # VK_EXT_memory_budget heap budget on integrated GPUs. Preserve explicit
     # ISS_GC_BUDGET_MB overrides for diagnosing devices with tighter limits.
-    "ISS_READBACKS": "2",
+    "ISS_READBACKS": "1",
     "ISS_EAGER_READBACK": "0",
     "ISS_WRITE_MERGE": "1",
     "ISS_DEFERRED_READBACK": "1",
@@ -96,7 +96,8 @@ def main():
     user = data / "user"
     user.mkdir(parents=True, exist_ok=True)
     setup_environment(env, user)
-    print("ISS boot defaults: inFAMOUS PC preset, precise readbacks, temporal upscale off", flush=True)
+    mode = env.get("TLG_READBACKS", env.get("ISS_READBACKS", "1"))
+    print(f"ISS experimental Glibc readback A/B: mode={mode} (1=Relaxed, 2=Precise)", flush=True)
 
     def run_step(script, *arguments):
         name = BASE / "scripts" / (script + ".py")
