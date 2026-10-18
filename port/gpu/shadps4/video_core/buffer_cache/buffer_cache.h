@@ -21,6 +21,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
+#include "video_core/buffer_cache/readback_copy_pages.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
@@ -233,6 +234,11 @@ private:
         /// Won't be applied; its ranges are back in gpu_modified_ranges.
         std::atomic<bool> recovered{};
         std::mutex mutex;
+        // Only pages actually copied from the GPU can become stale. The 512 KiB
+        // prefetch window is a scheduling envelope, not a set of copied bytes.
+        bool CopiesTouchPages(VAddr addr, VAddr end) const noexcept {
+            return ReadbackCopyPagesOverlap(arena_base, copies, addr, end);
+        }
         bool Done() const noexcept {
             return applied.load(std::memory_order_acquire) ||
                    recovered.load(std::memory_order_acquire);

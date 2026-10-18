@@ -1126,7 +1126,7 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end) {
     {
         std::scoped_lock lock{deferred_mutex};
         for (const auto& readback : deferred_readbacks) {
-            if (!readback->Done() && readback->start < end && start < readback->end) {
+            if (!readback->Done() && readback->CopiesTouchPages(start, end)) {
                 overlapping.push_back(readback);
             }
         }
@@ -1176,7 +1176,7 @@ void BufferCache::MarkDeferredStale(VAddr addr, u64 size, bool cpu) {
     {
         std::scoped_lock lock{deferred_mutex};
         for (const auto& readback : deferred_readbacks) {
-            if (!readback->Done() && readback->start < addr + size && addr < readback->end) {
+            if (!readback->Done() && readback->CopiesTouchPages(addr, addr + size)) {
                 readback->stale.store(true);
                 if (cpu) {
                     marked.push_back(readback);
