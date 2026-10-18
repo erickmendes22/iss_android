@@ -19,22 +19,23 @@ class InfamousStagingEvictionBudgetTests(unittest.TestCase):
         self.assertIn("#ifdef ISS_ANDROID_GLIBC", s)
         self.assertIn("size_t remaining_deletions = 4;", s)
         self.assertIn("std::numeric_limits<size_t>::max()", s)
-        self.assertIn("TrimRing(ring, remaining_deletions);", s)
-        self.assertIn("TrimLarge(cache, remaining_deletions);", s)
+        self.assertIn("TrimRing(ring, remaining_deletions, refreshed);", s)
+        self.assertIn("TrimLarge(cache, remaining_deletions, refreshed);", s)
         self.assertIn("target_compile_definitions(tlggpu PRIVATE ISS_ANDROID_GLIBC=1)", CMAKE.read_text())
 
     def test_gpu_lifetime_guards_preserved(self):
         s = SRC.read_text()
-        self.assertIn("scheduler.IsFree(block.buffer->LastTick())", s)
-        self.assertIn("scheduler.IsFree(entry.tick)", s)
+        self.assertIn("GpuTickComplete(block.buffer->LastTick(), refreshed)", s)
+        self.assertIn("GpuTickComplete(entry.tick, refreshed)", s)
         self.assertIn("entry.held", s)
         self.assertIn("frame - block.last_used_frame < RING_IDLE_FRAMES", s)
         self.assertIn("frame - entry.last_used_frame < LARGE_IDLE_FRAMES", s)
         self.assertIn("if (remaining_deletions == 0) break;", s)
         self.assertEqual(2, s.count("--remaining_deletions;"))
         h = HEADER.read_text()
-        self.assertIn("TrimRing(Ring& ring, size_t& remaining_deletions)", h)
-        self.assertIn("TrimLarge(std::vector<LargeBuffer>& cache, size_t& remaining_deletions)", h)
+        self.assertIn("TrimRing(Ring& ring, size_t& remaining_deletions, bool& refreshed)", h)
+        self.assertIn("TrimLarge(std::vector<LargeBuffer>& cache, size_t& remaining_deletions,", h)
+        self.assertIn("size_t& remaining_deletions, bool& refreshed)", h)
 
 
 if __name__ == "__main__":
