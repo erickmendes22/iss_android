@@ -73,8 +73,12 @@ private:
                                      VideoCore::MemoryType type);
     StagingBufferRef RequestLarge(u64 size, VideoCore::MemoryType type, bool deferred);
 
-    void TrimRing(Ring& ring, size_t& remaining_deletions);
-    void TrimLarge(std::vector<LargeBuffer>& cache, size_t& remaining_deletions);
+    // Conservative completion probe: query the driver once per scan; do not
+    // reuse or destroy GPU-visible memory until its timeline tick completes.
+    bool GpuTickComplete(u64 tick, bool& refreshed);
+    void TrimRing(Ring& ring, size_t& remaining_deletions, bool& refreshed);
+    void TrimLarge(std::vector<LargeBuffer>& cache, size_t& remaining_deletions,
+                   bool& refreshed);
 
     void PublishStats() const;
 

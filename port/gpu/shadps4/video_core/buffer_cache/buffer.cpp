@@ -313,10 +313,24 @@ bool StreamBuffer::WaitPendingOperations(u64 requested_upper_bound, bool allow_w
     }
     while (requested_upper_bound > wait_bound && wait_cursor < *invalidation_mark) {
         auto& watch = previous_watches[wait_cursor];
+#ifdef ISS_ANDROID_GLIBC
+        // IsFree() has already checked/refreshed the GPU timeline. Calling
+        // Wait() for a completed tick repeats synchronization work even
+        // though the previous staging users have finished. Only wait if
+        // in flight and this operation explicitly permits waiting.
+        const bool completed = scheduler.IsFree(watch.tick);
+        if (!completed) {
+            if (!allow_wait) {
+                return false;
+            }
+            scheduler.Wait(watch.tick);
+        }
+#else
         if (!scheduler.IsFree(watch.tick) && !allow_wait) {
             return false;
         }
         scheduler.Wait(watch.tick);
+#endif
         wait_bound = watch.upper_bound;
         ++wait_cursor;
     }
