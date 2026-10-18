@@ -46,6 +46,9 @@ export HOME="$FXD_FILES/home/iss"
 export TMPDIR="$root/tmp" XDG_RUNTIME_DIR="$root/tmp"
 export FXD_SHM_SOCKET="$root/tmp/.fxshm/sock"
 export FEXDROID_PRESENT="$root/tmp/fxpresent.sock"
+# Android draws its own controls; avoid two synchronous Xvfb cursor/geometry
+# reply round trips for every direct-present frame.
+export ISS_HIDE_X11_CURSOR=1
 export PYTHONHOME="$root/usr" PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
 export TLG_GAME_DIR="$game" TLG_DATA_DIR="$base" TLG_USER_DIR="$base/user"
 export ISS_CONFIG="$base/user/tlg.ini"

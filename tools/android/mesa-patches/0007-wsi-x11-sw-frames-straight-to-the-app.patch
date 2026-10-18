@@ -8,8 +8,9 @@ present thread at 12-35% of a core and Xvfb at 6-20%.
 
 With FEXDROID_PRESENT=<socket of the app>, a swapchain whose window covers the
 whole X screen copies each frame into memory it shares with the app and tells
-the app; nothing is sent to the X server. The pointer, which Xvfb draws into
-its framebuffer, is drawn into the frame from XFixesGetCursorImage. A window
+the app; nothing is sent to the X server. When the optional X11 cursor is enabled, its image is drawn using
+XFixesGetCursorImage. Android direct-present hides this unused X11 cursor,
+skipping blocking per-frame XCB cursor and geometry replies. A window
 that does not cover the screen, or an app that does not listen, gets the
 frames through the X server as before.
 
@@ -201,11 +202,11 @@ Local patch, not upstream (NOTES.md N-048).
 +   }
 +
 +   /* Where the window and the pointer are: asked now, answered after the copy. */
++   const bool show_cursor = !os_get_option("ISS_HIDE_X11_CURSOR");
 +   xcb_translate_coordinates_cookie_t place_cookie = { 0 };
-+   xcb_xfixes_get_cursor_image_cookie_t cursor_cookie = xcb_xfixes_get_cursor_image(chain->conn);
-+   if (d->root)
-+      place_cookie = xcb_translate_coordinates(chain->conn, chain->window, d->root, 0, 0);
-+   xcb_flush(chain->conn);
++   xcb_xfixes_get_cursor_image_cookie_t cursor_cookie = { 0 };
++   if (show_cursor) cursor_cookie = xcb_xfixes_get_cursor_image(chain->conn);
++   if (show_cursor && d->root) place_cookie = xcb_translate_coordinates(chain->conn, chain->window, d->root, 0, 0);
 +
 +   struct fxpresent_shared *sh = (struct fxpresent_shared *)d->map;
 +   const bool direct = d->covers_screen;
@@ -220,9 +221,9 @@ Local patch, not upstream (NOTES.md N-048).
 +      memcpy(frame, image->base.cpu_map, (size_t)stride * chain->extent.height);
 +
 +      int win_x = atomic_load(&sh->x), win_y = atomic_load(&sh->y);
-+      xcb_xfixes_get_cursor_image_reply_t *cur = xcb_xfixes_get_cursor_image_reply(chain->conn, cursor_cookie, NULL);
++      xcb_xfixes_get_cursor_image_reply_t *cur = show_cursor ? xcb_xfixes_get_cursor_image_reply(chain->conn, cursor_cookie, NULL) : NULL;
 +      xcb_translate_coordinates_reply_t *place =
-+         d->root ? xcb_translate_coordinates_reply(chain->conn, place_cookie, NULL) : NULL;
++         show_cursor && d->root ? xcb_translate_coordinates_reply(chain->conn, place_cookie, NULL) : NULL;
 +      if (place) {
 +         win_x = place->dst_x;
 +         win_y = place->dst_y;
@@ -243,8 +244,8 @@ Local patch, not upstream (NOTES.md N-048).
 +         return false;
 +      }
 +   } else {
-+      xcb_discard_reply(chain->conn, cursor_cookie.sequence);
-+      if (d->root)
++      if (show_cursor) xcb_discard_reply(chain->conn, cursor_cookie.sequence);
++      if (show_cursor && d->root)
 +         xcb_discard_reply(chain->conn, place_cookie.sequence);
 +   }
 +   return direct;
