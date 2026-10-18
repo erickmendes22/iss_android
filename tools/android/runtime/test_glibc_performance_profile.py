@@ -28,6 +28,8 @@ class PerformanceProfileTests(unittest.TestCase):
         self.assertNotIn('"ISS_FRAME_STATS":', LAUNCH)
         self.assertIn('"ISS_READBACKS": "2"', LAUNCH)
         self.assertIn('"ISS_DEFERRED_READBACK": "1"', LAUNCH)
+        self.assertNotIn('"ISS_GC_BUDGET_MB":', LAUNCH)
+        self.assertIn('env.setdefault(key, value)', LAUNCH)
         self.assertIn('Flag("TLG_READBACK_LINEAR", false)', EMULATOR)
         self.assertNotIn("TLG_READBACK_LINEAR=1", SHELL)
 

@@ -14,7 +14,12 @@ sys.path.insert(0, str(BASE / "scripts"))
 # Defaults verified in the inFAMOUS PC launcher (port/launcher/infamous_run.py).
 # Explicit settings from the Android launcher or user are not overwritten.
 ISS_DEFAULTS = {
-    "ISS_GC_BUDGET_MB": "3500",
+    # No forced 3.5 GiB texture-GC budget. This ISS Android/glibc runtime has
+    # several GiB of unavoidable guest sparse-buffer residency on Adreno 830;
+    # treating total Vulkan heap usage as texture-cache usage forces perpetual
+    # eviction/reupload. TextureCache already obtains the current
+    # VK_EXT_memory_budget heap budget on integrated GPUs. Preserve explicit
+    # ISS_GC_BUDGET_MB overrides for diagnosing devices with tighter limits.
     "ISS_READBACKS": "2",
     "ISS_EAGER_READBACK": "0",
     "ISS_WRITE_MERGE": "1",
