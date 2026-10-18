@@ -25,7 +25,7 @@ class PerformanceProfileTests(unittest.TestCase):
         self.assertIn("if (ISS_ANDROID_GLIBC)", CMAKE)
 
     def test_stats_opt_in_but_readbacks_unchanged(self):
-        self.assertIn('"ISS_FRAME_STATS": "0"', LAUNCH)
+        self.assertNotIn('"ISS_FRAME_STATS":', LAUNCH)
         self.assertIn('"ISS_READBACKS": "2"', LAUNCH)
         self.assertIn('"ISS_DEFERRED_READBACK": "1"', LAUNCH)
         self.assertIn('Flag("TLG_READBACK_LINEAR", false)', EMULATOR)

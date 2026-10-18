@@ -471,7 +471,7 @@ void Rasterizer::DrainDrawPipe(u32 reason, u32 line, const char* function) {
     if (!draw_pipe || !OnStageA()) {
         return;
     }
-    static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
+    static const bool stats = DrawPipe::CollectTiming();
     if (!stats) {
         draw_pipe->Drain(reason);
         return;
@@ -910,7 +910,7 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
 }
 
 void Rasterizer::PrintPipeStats() {
-    static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
+    static const bool stats = DrawPipe::CollectTiming();
     if (!stats || (draw_pipe->packets & 1023) != 0) {
         return;
     }
@@ -2131,7 +2131,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
 
     bool uses_dma = false;
 
-    static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
+    static const bool stats = DrawPipe::CollectTiming();
     if (stats && ((helper_full + helper_partial + helper_serial) & 1023) == 0) {
         static auto window = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
