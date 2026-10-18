@@ -1085,18 +1085,36 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
     }
     readback.staging.Invalidate();
     const u8* const mapped = readback.staging.mapped - readback.staging.offset;
-    const bool applied = memory_tracker->ApplyGpuCopyIf(
-        readback.start, readback.end - readback.start, [&] { return !readback.stale.load(); },
-        [&](VAddr start, VAddr end) {
-            for (const auto& copy : readback.copies) {
-                const VAddr copy_start = readback.arena_base + copy.srcOffset;
-                const VAddr lo = std::max<VAddr>(copy_start, start);
-                const VAddr hi = std::min<VAddr>(copy_start + copy.size, end);
-                if (lo < hi) {
-                    memory->TryWriteBacking(reinterpret_cast<void*>(lo),
-                                            mapped + copy.dstOffset + (lo - copy_start), hi - lo);
-                }
+    // A different GPU write inside the 512 KiB prefetch window can now stay live.
+    // Apply/unprotect only pages that were actually copied, never the entire window.
+    // Copies on the same page are grouped: unmarking the page after the first copy
+    // would otherwise prevent the remaining copies from being published.
+    bool applied = true;
+    ForEachReadbackCopyPageGroup(
+        readback.arena_base, readback.copies,
+        [&](VAddr group_start, VAddr group_end, std::size_t first, std::size_t last) {
+            if (!applied) {
+                return;
             }
+            const VAddr start = std::max<VAddr>(group_start, readback.start);
+            const VAddr end = std::min<VAddr>(group_end, readback.end);
+            if (start >= end) {
+                return;
+            }
+            applied = memory_tracker->ApplyGpuCopyIf(
+                start, end - start, [&] { return !readback.stale.load(); },
+                [&](VAddr write_start, VAddr write_end) {
+                    for (std::size_t i = first; i < last; ++i) {
+                        const auto& copy = readback.copies[i];
+                        const VAddr copy_start = readback.arena_base + copy.srcOffset;
+                        const VAddr lo = std::max<VAddr>(copy_start, write_start);
+                        const VAddr hi = std::min<VAddr>(copy_start + copy.size, write_end);
+                        if (lo < hi) {
+                            memory->TryWriteBacking(reinterpret_cast<void*>(lo),
+                                mapped + copy.dstOffset + (lo - copy_start), hi - lo);
+                        }
+                    }
+                });
         });
     if (!applied) {
         return false;

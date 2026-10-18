@@ -14,6 +14,8 @@ class ReadbackCopyPagesTests(unittest.TestCase):
         body = BUFFER.read_text()
         self.assertIn("readback->CopiesTouchPages(start, end)", body)
         self.assertIn("readback->CopiesTouchPages(addr, addr + size)", body)
+        self.assertIn("ForEachReadbackCopyPageGroup(", body)
+        self.assertNotIn("readback.start, readback.end - readback.start", body)
         self.assertIn('readback_copy_pages.h', BUFFER_HDR.read_text())
 
     @unittest.skipUnless(shutil.which("c++"), "host C++ compiler unavailable")
@@ -22,6 +24,7 @@ class ReadbackCopyPagesTests(unittest.TestCase):
 #include <cassert>
 #include <cstdint>
 #include <vector>
+#include <utility>
 #include "video_core/buffer_cache/readback_copy_pages.h"
 struct Copy { uint64_t srcOffset, dstOffset, size; };
 int main() {
@@ -43,6 +46,23 @@ int main() {
     std::vector<Copy> partial{{0x1fff, 0, 2}};
     assert(VideoCore::ReadbackCopyPagesOverlap(base, partial, base + 0x2000, base + 0x2001));
     assert(VideoCore::ReadbackCopyPagesOverlap(base, partial, base + 0x1000, base + 0x1001));
+    // Noncontiguous dirty islands in the same readback window must not
+    // clear the GPU-dirty flag of untouched intermediate pages.
+    std::vector<Copy> islands{{0x1010, 0, 16}, {0x1800, 16, 8},
+                              {0x9000, 24, 32}, {0xa000, 56, 4096}};
+    std::vector<std::pair<uint64_t,uint64_t>> spans;
+    std::vector<std::pair<size_t,size_t>> indices;
+    VideoCore::ForEachReadbackCopyPageGroup(base, islands,
+        [&](uint64_t a, uint64_t b, size_t i, size_t j) {
+            spans.emplace_back(a-base,b-base);
+            indices.emplace_back(i,j);
+        });
+    assert((spans == std::vector<std::pair<uint64_t,uint64_t>>{
+        {0x1000,0x2000}, {0x9000,0xb000}
+    }));
+    assert((indices == std::vector<std::pair<size_t,size_t>>{
+        {0,2}, {2,4}
+    }));
 }
 '''
         with tempfile.TemporaryDirectory() as temp:
