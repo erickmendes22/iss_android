@@ -87,7 +87,14 @@ struct Values {
     std::atomic<bool> rcas_applied{false};
     /// Set by the presenter: the game's image and the window it is shown in, in pixels.
     std::atomic<int> image_width{0}, image_height{0}, window_width{0}, window_height{0};
+#ifdef ISS_ANDROID_GLIBC
+    // Allow the Android CPU/FEX command thread to overlap another frame
+    // with the GPU. TLG_FRAMES_AHEAD and persisted frames_queued still override.
+    // A maximum of two GPU frames in flight retains backpressure.
+    std::atomic<int> frames_queued{2};
+#else
     std::atomic<int> frames_queued{1};
+#endif
     // Startup: run.py turns them into patches and environment variables; "Apply and restart".
     std::atomic<int> render_resolution{0};
     std::atomic<int> engine_fps{120};

@@ -146,8 +146,14 @@ inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, 
     copy_threads_wait_ns{0}, host_copy_waits{0};
 struct WaitTimer {
     std::atomic<std::uint64_t>& total;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    // Avoid two clock_gettime calls plus an atomic for every scheduler wait
+    // when TLG_FRAME_STATS is off. Preserve the original measurements on demand.
+    std::chrono::steady_clock::time_point start =
+        enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     ~WaitTimer() {
+        if (!enabled) {
+            return;
+        }
         total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::steady_clock::now() - start).count(),
                         std::memory_order_relaxed);

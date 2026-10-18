@@ -24,7 +24,9 @@ ISS_DEFAULTS = {
     "ISS_UPSCALER": "off",
     "ISS_JITTER": "0",
     "ISS_OBJECT_MOTION": "0",
-    "ISS_FRAME_STATS": "1",
+    # Per-draw/frame timings include many clock calls and atomics. Keep off for
+    # production FPS tests; ISS_FRAME_STATS=1 can still be supplied for diagnosis.
+    "ISS_FRAME_STATS": "0",
 }
 
 

@@ -152,22 +152,23 @@ end_stage "libisscpu.so"
 
 # ---- 2/4 libtlggpu.so (shadPS4 video core + drivers) -----------------------
 begin "libtlggpu.so (shadPS4 video core)"
-if [[ ! -f $out/gpu/build.ninja ]]; then
-    echo "    cmake: gpu/"
+# Always reconfigure: an existing Ninja cache may still have RelWithDebInfo/LTO=OFF.
+# The ARM64 renderer is a hot path; release optimization and cross-module IPO
+# must be enabled in the APK being measured against BACHATA.
+echo "    cmake: gpu/ (Release + LTO)"
     fmt_config="$sysroot/usr/lib/aarch64-linux-gnu/cmake/fmt"
     if [[ ! -f "$fmt_config/fmt-config.cmake" ]]; then
         echo "ARM64 fmt CMake config missing: $fmt_config (install libfmt-dev in sysroot)" >&2
         exit 1
     fi
     cmake -S port/gpu -B "$out/gpu" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTLG_PGO=off -DTLG_LTO=OFF -DISS_ANDROID_GLIBC=ON -DISS_CPU_LIBRARY="$out/fex/libisscpu.so" \
+        -DCMAKE_BUILD_TYPE=Release -DTLG_PGO=off -DTLG_LTO=ON -DISS_ANDROID_GLIBC=ON -DISS_CPU_LIBRARY="$out/fex/libisscpu.so" \
         -DISS_ARM64_HEADER_PREFIX="$headers" \
         -Dfmt_DIR="$fmt_config" \
         -Dtsl-robin-map_DIR="$headers/share/cmake/tsl-robin-map" \
         -DVulkanMemoryAllocator_DIR="$headers/share/cmake/VulkanMemoryAllocator" \
         -DBoost_DIR="$boost_dir" \
         -DZydis_DIR="$sysroot/usr/lib/aarch64-linux-gnu/cmake/zydis" >/dev/null
-fi
 if ! build_ninja "$out/gpu" tlggpu "$out/gpu-build.log"; then
     echo "    GPU build failed (full log: $out/gpu-build.log)" >&2
     grep -v '^\[' "$out/gpu-build.log" | tail -40 >&2
