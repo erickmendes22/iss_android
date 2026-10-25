@@ -1,6 +1,7 @@
 /* Minimal x86-64 native loader experiment. Not a PS4 emulator or game port. */
 #define _GNU_SOURCE
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -875,12 +876,13 @@ static void install_view_tuning(const char *app0, Segment *segments, uint64_t co
  * Exact CUSA/version differences refuse the patch rather than guessing.
  */
 static uintptr_t iss_native_trampoline;
-static uint64_t iss_native_draw_calls;
+static _Atomic uint64_t iss_native_draw_calls;
 static void iss_native_draw_callback(GuestRegs *regs) {
-    ++iss_native_draw_calls;
-    if ((iss_native_draw_calls & 0x7ffff) == 0)
+    const uint64_t calls = atomic_fetch_add_explicit(
+        &iss_native_draw_calls, 1, memory_order_relaxed) + 1;
+    if ((calls & 0x7ffff) == 0)
         printf("ISS Native Passes ARM64 engine bridge: %" PRIu64
-               " drawIndex calls (recording=original)\n", iss_native_draw_calls);
+               " drawIndex calls (recording=original)\n", calls);
     regs->rip = iss_native_trampoline + ISS_NATIVE_DRAW_AFTER_TRAP;
 }
 static void install_native_pass_guest_bridge(Segment *segments, uint64_t count, uint64_t size) {
