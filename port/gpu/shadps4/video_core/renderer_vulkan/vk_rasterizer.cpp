@@ -1143,6 +1143,13 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // Global NativeSecondaryRequested() previously reordered bindings even
     // for primary fallbacks, including critical color-output passes.
     const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
     if (!native_graphics) {
         EmitVertexBuffers();
         if (is_indexed) EmitIndexBuffer();
@@ -1411,6 +1418,13 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     // Global NativeSecondaryRequested() previously reordered bindings even
     // for primary fallbacks, including critical color-output passes.
     const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
     if (native_graphics) {
         ResolveVertexBuffers(pipeline, nullptr);
         if (is_indexed) ResolveIndexBuffer(0);
