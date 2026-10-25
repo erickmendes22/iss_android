@@ -37,12 +37,16 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     if (const char* e = std::getenv("ISS_NATIVE_PASSES_ARM64_SECONDARY");
         e && e[0] == '1') {
         native_secondary_enabled = true;
+        if (const char* color = std::getenv("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES");
+            color && color[0] == '1') native_secondary_color_passes = true;
         for (auto& p : native_secondary_pools) {
             p = std::make_unique<CommandPool>(instance, &work_semaphore,
                                                 vk::CommandBufferLevel::eSecondary);
         }
-        std::printf("ISS Native Passes ARM64 Vulkan secondary recording: experimental on "
-                    "(eligible 1x passes, no occlusion observer; no pass reuse yet)\n");
+        std::printf("ISS Native Passes ARM64 Vulkan secondary recording: %s "
+                    "(color passes %s; no pass reuse yet)\n",
+                    "experimental on",
+                    native_secondary_color_passes ? "unsafe opt-in" : "primary fallback");
     }
 #endif
     // tlg: TLG_VK_RECORD_THREAD=0 records on the calling thread.
@@ -177,11 +181,10 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .pStencilAttachment = db.has_stencil ? &stencil_attachment : nullptr,
     };
 
-    const bool use_secondary = native_secondary_enabled && recording_threaded &&
-                               !direct_mode &&
-                               (!rendering_observer ||
-                                rendering_observer->AllowsSecondaryRendering()) &&
-                               new_state.native_eligible && !FullBarriers();
+    // The pre-draw binding decision and the rendering-scope decision must
+    // agree. Previously, all draws changed binding order whenever the global
+    // experimental switch was on, including ineligible primary-only passes.
+    const bool use_secondary = WillUseNativeSecondary(new_state);
     native_secondary_current_scope = use_secondary;
     if (native_secondary_enabled) {
         // Vulkan secondary command buffers inherit rendering attachments, NOT

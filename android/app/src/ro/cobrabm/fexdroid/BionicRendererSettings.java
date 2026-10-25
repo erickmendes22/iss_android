@@ -21,16 +21,21 @@ final class BionicRendererSettings {
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
   // Real secondary Vulkan recording, separate from scan/hook and disabled by
   // default. This is not yet the PC's reusable-material native pass cache.
-  env.put("ISS_NATIVE_PASSES_ARM64_SECONDARY",
-      p.getBoolean("renderer_native_passes_arm64_secondary",false) ? "1" : "0");
+  final boolean nativeSecondary = p.getBoolean("renderer_native_passes_arm64_secondary",false);
+  env.put("ISS_NATIVE_PASSES_ARM64_SECONDARY",nativeSecondary ? "1" : "0");
+  env.put("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES",
+      nativeSecondary && p.getBoolean("renderer_native_passes_arm64_color_passes",false) ? "1" : "0");
   // Optional FEX guest draw observation only. Disabled unless explicitly enabled
   // through this separate setting, which is not an acceleration switch.
+  // The FEX probe and PM4 scanner are diagnostics. Mixing them with Vulkan
+  // secondary rendering obscures FPS and image regressions. Suppress both
+  // whenever the rendering experiment is enabled.
   env.put("ISS_NATIVE_PASSES_ARM64_ENGINE_HOOK",
-      p.getBoolean("renderer_native_passes_arm64_guest_observe",false) ? "1" : "0");
+      !nativeSecondary && p.getBoolean("renderer_native_passes_arm64_guest_observe",false) ? "1" : "0");
   // Separate native-passes experimental branch. Scan-only until secondary
   // Vulkan recording and register compatibility have their own validation.
   env.put("ISS_NATIVE_PASSES_ARM64",
-      p.getBoolean("renderer_native_passes_arm64_scan",false) ? "1" : "0");
+      !nativeSecondary && p.getBoolean("renderer_native_passes_arm64_scan",false) ? "1" : "0");
   // V2: use staged GPU->CPU copies for visibility instead of reading sparse
   // residency directly; prefetch recurring fault pages at fences to overlap waits.
   // Never apply this experiment to the proven Precise mode or plain Relaxed.
@@ -75,6 +80,12 @@ final class BionicRendererSettings {
   secondary.setChecked(p.getBoolean("renderer_native_passes_arm64_secondary",false));
   secondary.setPadding(0,24,0,20);
   panel.addView(secondary);
+  CheckBox colorPasses=new CheckBox(a);
+  colorPasses.setText(AppLanguage.text(
+      "Unsafe: also use secondary Vulkan for color passes (may cause a black screen)",
+      "Arriscado: usar Vulkan secundário também nos passes de cor (pode deixar a tela preta)"));
+  colorPasses.setChecked(p.getBoolean("renderer_native_passes_arm64_color_passes",false));
+  panel.addView(colorPasses);
 
   TextView note=new TextView(a);
   note.setText(AppLanguage.text(
@@ -105,6 +116,7 @@ final class BionicRendererSettings {
    .setPositiveButton(AppLanguage.text("Apply","Aplicar"),(d,which)->{
     p.edit()
      .putBoolean("renderer_native_passes_arm64_secondary",secondary.isChecked())
+     .putBoolean("renderer_native_passes_arm64_color_passes",colorPasses.isChecked())
      .putBoolean("renderer_native_passes_arm64_scan",scan.isChecked())
      .putBoolean("renderer_native_passes_arm64_guest_observe",fex.isChecked())
      .apply();

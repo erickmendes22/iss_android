@@ -1139,7 +1139,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             ResolveIndexBuffer(index_offset);
         }
     }
-    const bool native_graphics = scheduler.NativeSecondaryRequested();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
     if (!native_graphics) {
         EmitVertexBuffers();
         if (is_indexed) EmitIndexBuffer();
@@ -1404,7 +1407,10 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
 
-    const bool native_graphics = scheduler.NativeSecondaryRequested();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
     if (native_graphics) {
         ResolveVertexBuffers(pipeline, nullptr);
         if (is_indexed) ResolveIndexBuffer(0);

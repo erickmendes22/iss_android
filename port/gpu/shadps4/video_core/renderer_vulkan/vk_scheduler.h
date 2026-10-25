@@ -953,6 +953,19 @@ public:
     [[nodiscard]] bool NativeSecondaryRequested() const noexcept {
         return native_secondary_enabled;
     }
+    /// Query this BEFORE moving pipeline/descriptor binding after BeginRendering.
+    /// Ineligible graphics passes must retain the unchanged primary draw order.
+    [[nodiscard]] bool WillUseNativeSecondary(const RenderState& next) const noexcept {
+        if (!native_secondary_enabled) return false;
+        if (is_rendering && render_state == next) return native_secondary_current_scope;
+        if (!recording_threaded || direct_mode || FullBarriers() || !next.native_eligible)
+            return false;
+        if (rendering_observer && !rendering_observer->AllowsSecondaryRendering()) return false;
+        // Keep color-output passes on the working primary Vulkan renderer until
+        // exact inheritance and framebuffer contents pass device validation.
+        if (next.num_color_attachments != 0 && !native_secondary_color_passes) return false;
+        return true;
+    }
 
     /// tlg: see RenderingObserver (one at a time; nullptr removes it).
     void SetRenderingObserver(RenderingObserver* observer) noexcept {
@@ -1056,6 +1069,7 @@ private:
     std::array<NativeSecondaryScope, 2> native_secondary_scopes{};
     std::array<std::unique_ptr<CommandPool>, 2> native_secondary_pools{};
     bool native_secondary_enabled = false;
+    bool native_secondary_color_passes = false;
     bool native_secondary_current_scope = false;
     std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
     unsigned parallel_lane = 0;
