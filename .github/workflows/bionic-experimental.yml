@@ -150,6 +150,26 @@ jobs:
       - name: Assemble, sign and verify isolated inFAMOUS Bionic APK
         if: github.ref_name == 'experimental-bionic'
         run: bash tools/android/bionic/build_apk.sh
+      - name: Assemble and verify separate Native Passes experiment APK
+        if: github.ref_name == 'experimental-native-passes-arm64'
+        env:
+          ISS_RELEASE_BUILD: '0'
+          ISS_NATIVE_PASSES_TEST_APK: '1'
+        run: |
+          bash tools/android/bionic/build_apk.sh
+          test -s out/release/inFAMOUS-Second-Son-NativePasses-EXPERIMENTAL-v0.1.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose             out/release/inFAMOUS-Second-Son-NativePasses-EXPERIMENTAL-v0.1.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging             out/release/inFAMOUS-Second-Son-NativePasses-EXPERIMENTAL-v0.1.apk |
+            grep -F "package: name='com.daedalus.iss.bionic.nativepasses'"
+      - uses: actions/upload-artifact@v4
+        if: github.ref_name == 'experimental-native-passes-arm64'
+        with:
+          name: iss-native-passes-EXPERIMENTAL-apk-${{ github.sha }}
+          path: |
+            out/release/inFAMOUS-Second-Son-NativePasses-EXPERIMENTAL-v0.1.apk
+            out/release/inFAMOUS-Second-Son-NativePasses-EXPERIMENTAL-v0.1.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload native Bionic libraries and driver metadata
         uses: actions/upload-artifact@v4
         with:
