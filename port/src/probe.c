@@ -16,6 +16,7 @@
 #include "damage_hook.h"
 #include "view_hook.h"
 #include "iss_menu_state.h"
+#include "native_pass_arm64_hook.h"
 #include "gpu/tlggpu.h"
 #if !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -867,6 +868,51 @@ static void install_view_tuning(const char *app0, Segment *segments, uint64_t co
     printf("Draw distance: ready (LOD scale, LOD bands, region LOD_ADJUST and FADE_DISTANCE, near/far clip)\n");
 }
 
+#if defined(__ANDROID__) && !defined(GUEST_CPU_NATIVE)
+/* Optional bridge for the PC Native Passes engine path. The original native
+ * hook is sysv_abi x86-64 and cannot be used as an ARM64 function pointer.
+ * The current bridge is observation-only, and MUST stay separately opt-in.
+ * Exact CUSA/version differences refuse the patch rather than guessing.
+ */
+static uintptr_t iss_native_trampoline;
+static uint64_t iss_native_draw_calls;
+static void iss_native_draw_callback(GuestRegs *regs) {
+    ++iss_native_draw_calls;
+    if ((iss_native_draw_calls & 0x7ffff) == 0)
+        printf("ISS Native Passes ARM64 engine bridge: %" PRIu64
+               " drawIndex calls (recording=original)\n", iss_native_draw_calls);
+    regs->rip = iss_native_trampoline + ISS_NATIVE_DRAW_AFTER_TRAP;
+}
+static void install_native_pass_guest_bridge(Segment *segments, uint64_t count, uint64_t size) {
+    const char *enabled=getenv("ISS_NATIVE_PASSES_ARM64_ENGINE_HOOK");
+    if (!enabled || enabled[0]!='1') return;
+    if (!mapped(segments,count,ISS_NATIVE_DRAW_OFFSET,ISS_NATIVE_DRAW_PROLOGUE_SIZE) ||
+        !iss_native_draw_signature(image,size)) {
+        puts("ISS Native Passes ARM64 engine bridge refused: drawIndex code signature mismatch");
+        return;
+    }
+    unsigned char *stub=allocate(page_size);
+    const uintptr_t resume=(uintptr_t)image+ISS_NATIVE_DRAW_OFFSET+ISS_NATIVE_DRAW_PROLOGUE_SIZE;
+    iss_native_trampoline=(uintptr_t)stub;
+    iss_native_make_trampoline(stub,resume);
+    protect(stub,page_size,5);
+    guest_cpu_code((uintptr_t)stub,page_size);
+    if (!guest_cpu_hook((uintptr_t)stub+ISS_NATIVE_DRAW_TRAP_OFFSET,2,
+                        iss_native_draw_callback)) {
+        puts("ISS Native Passes ARM64 engine bridge refused: FEX hook registration failed");
+        return;
+    }
+    unsigned char jump[ISS_NATIVE_DRAW_PROLOGUE_SIZE];
+    iss_native_jump14(jump,(uintptr_t)stub);
+    memcpy(image+ISS_NATIVE_DRAW_OFFSET,jump,sizeof(jump));
+    puts("ISS Native Passes ARM64 engine bridge installed (observation only, no secondary Vulkan execution)");
+}
+#else
+static void install_native_pass_guest_bridge(Segment *segments, uint64_t count, uint64_t size) {
+    (void)segments; (void)count; (void)size;
+}
+#endif
+
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied
  * after relocation. A write may replace a whole base-relative pointer slot (60/90 FPS++ swap
  * function pointers): the patch holds the address at the patches' base, rebased here. */
@@ -1455,6 +1501,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
     if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
+    if (gpu_enabled) install_native_pass_guest_bridge(segments, ns, size);
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif

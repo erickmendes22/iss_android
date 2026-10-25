@@ -19,6 +19,10 @@ final class BionicRendererSettings {
   env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
   env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
+  // Optional FEX guest draw observation only. Disabled unless explicitly enabled
+  // through this separate setting, which is not an acceleration switch.
+  env.put("ISS_NATIVE_PASSES_ARM64_ENGINE_HOOK",
+      p.getBoolean("renderer_native_passes_arm64_guest_observe",false) ? "1" : "0");
   // Separate native-passes experimental branch. Scan-only until secondary
   // Vulkan recording and register compatibility have their own validation.
   env.put("ISS_NATIVE_PASSES_ARM64",
@@ -56,6 +60,14 @@ final class BionicRendererSettings {
   nativePassScan.setOnCheckedChangeListener((b,on)->
       p.edit().putBoolean("renderer_native_passes_arm64_scan",on).apply());
   panel.addView(nativePassScan);
+  CheckBox nativeGuestObserver=new CheckBox(a);
+  nativeGuestObserver.setText(AppLanguage.text(
+    "Native Passes FEX bridge (advanced observation only; may reduce FPS)",
+    "Ponte Native Passes FEX (apenas observação avançada; pode reduzir FPS)"));
+  nativeGuestObserver.setChecked(p.getBoolean("renderer_native_passes_arm64_guest_observe",false));
+  nativeGuestObserver.setOnCheckedChangeListener((b,on)->
+      p.edit().putBoolean("renderer_native_passes_arm64_guest_observe",on).apply());
+  panel.addView(nativeGuestObserver);
   CheckBox hybrid=new CheckBox(a);
   hybrid.setText(AppLanguage.text("Experimental Relaxed + Precise read protection (smoke/powers; may reduce FPS)",
     "Experimental: Relaxed + proteção de leitura Precise (fumaça/poderes; pode reduzir FPS)"));
