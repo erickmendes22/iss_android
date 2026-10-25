@@ -19,6 +19,7 @@ class NativeSecondaryIntegration(unittest.TestCase):
             'native_secondary_pools[native_lane]->Commit()']:
    self.assertIn(s,c)
   self.assertIn('state.native_eligible = eligible ? 1 : 0;',r)
+  self.assertIn('if (arm64_native_secondary_requested &&',r)
   self.assertIn('vk::FormatFeatureFlagBits2::eColorAttachment',r)
   self.assertIn('.level = level,',p)
   self.assertIn('renderer_native_passes_arm64_secondary',a)

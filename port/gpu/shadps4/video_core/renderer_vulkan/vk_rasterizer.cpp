@@ -3686,7 +3686,16 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     // Exact formats inherited by secondary Vulkan commands. The existing
     // graphics pipeline uses LiverpoolToVK::SurfaceFormat/DepthFormat. Restrict
     // the pilot to ordinary 1x attachments, no mixed samples or feedback loops.
-    if (state.num_color_attachments <= state.native_color_formats.size() &&
+    static const bool arm64_native_secondary_requested = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* e = std::getenv("ISS_NATIVE_PASSES_ARM64_SECONDARY");
+        return e && e[0] == '1';
+#else
+        return false;
+#endif
+    }();
+    if (arm64_native_secondary_requested &&
+        state.num_color_attachments <= state.native_color_formats.size() &&
         key.num_samples == 1 && key.depth_samples <= 1 &&
         !attachment_feedback_loop) {
         bool eligible = true;
