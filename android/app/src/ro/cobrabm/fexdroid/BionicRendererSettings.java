@@ -49,6 +49,68 @@ final class BionicRendererSettings {
   env.put("TLG_GC_BATCH_DOWNLOAD",p.getBoolean("renderer_batch_gc",true)?"1":"0");
   env.put("ISS_VMA_BLOCK_MB",p.getBoolean("renderer_small_blocks",true)?"64":"0");
  }
+
+ static String nativePassesSummary(Activity a) {
+  boolean enabled=a.getSharedPreferences("iss",0)
+    .getBoolean("renderer_native_passes_arm64_secondary",false);
+  return enabled ? AppLanguage.text("Enabled", "Ativado")
+                 : AppLanguage.text("Disabled", "Desativado");
+ }
+ static void showNativePasses(Activity a,Runnable onApplied) {
+  SharedPreferences p=a.getSharedPreferences("iss",0);
+  LinearLayout panel=new LinearLayout(a);
+  panel.setOrientation(1);
+  panel.setPadding(32,24,32,24);
+  TextView explanation=new TextView(a);
+  explanation.setText(AppLanguage.text(
+    "Compare the same scene with secondary Vulkan rendering OFF and ON. Keep readback settings unchanged, and restart the game after each change. No FPS improvement or visual stability is confirmed yet on Adreno.",
+    "Compare a mesma cena com renderização Vulkan secundária desligada e ligada. Mantenha o Readback igual e reinicie o jogo após cada alteração. Ainda não há ganho de FPS nem estabilidade visual confirmados no Adreno."));
+  explanation.setTextSize(15);
+  panel.addView(explanation);
+
+  CheckBox secondary=new CheckBox(a);
+  secondary.setText(AppLanguage.text(
+    "Enable secondary Vulkan passes (experimental rendering)",
+    "Ativar passes Vulkan secundários (renderização experimental)"));
+  secondary.setChecked(p.getBoolean("renderer_native_passes_arm64_secondary",false));
+  secondary.setPadding(0,24,0,20);
+  panel.addView(secondary);
+
+  TextView note=new TextView(a);
+  note.setText(AppLanguage.text(
+    "Diagnostics only (leave OFF for FPS comparisons):",
+    "Somente diagnóstico (deixe DESLIGADO ao comparar FPS):"));
+  note.setTextSize(14);
+  panel.addView(note);
+
+  CheckBox scan=new CheckBox(a);
+  scan.setText(AppLanguage.text("Analyze PM4 draws (no acceleration)",
+                                 "Analisar draws PM4 (sem aceleração)"));
+  scan.setChecked(p.getBoolean("renderer_native_passes_arm64_scan",false));
+  panel.addView(scan);
+  CheckBox fex=new CheckBox(a);
+  fex.setText(AppLanguage.text(
+    "Observe FEX drawIndex calls (may reduce FPS)",
+    "Observar drawIndex do FEX (pode reduzir FPS)"));
+  fex.setChecked(p.getBoolean("renderer_native_passes_arm64_guest_observe",false));
+  panel.addView(fex);
+
+  android.widget.ScrollView scroll=new android.widget.ScrollView(a);
+  scroll.addView(panel);
+  new AlertDialog.Builder(a)
+   .setTitle(AppLanguage.text("Native Passes ARM64 — experimental",
+                              "Native Passes ARM64 — experimental"))
+   .setView(scroll)
+   .setNegativeButton(AppLanguage.text("Cancel","Cancelar"),null)
+   .setPositiveButton(AppLanguage.text("Apply","Aplicar"),(d,which)->{
+    p.edit()
+     .putBoolean("renderer_native_passes_arm64_secondary",secondary.isChecked())
+     .putBoolean("renderer_native_passes_arm64_scan",scan.isChecked())
+     .putBoolean("renderer_native_passes_arm64_guest_observe",fex.isChecked())
+     .apply();
+    if(onApplied!=null)onApplied.run();
+   }).show();
+ }
  static void show(Activity a){
   SharedPreferences p=a.getSharedPreferences("iss",0);
   LinearLayout panel=new LinearLayout(a);panel.setOrientation(1);panel.setPadding(24,12,24,12);

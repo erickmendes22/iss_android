@@ -59,6 +59,7 @@ public final class BionicMainActivity extends Activity {
    directStart=BionicStartupSettings.toggle(this);game.addView(directStart);actions.add(directStart);
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
    button(video,AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes")+" · "+BionicReadbackSettings.summary(this),()->BionicReadbackSettings.show(this,()->showPage(0)));
+   button(video,AppLanguage.text("Native Passes ARM64 · ", "Native Passes ARM64 · ")+BionicRendererSettings.nativePassesSummary(this),()->BionicRendererSettings.showNativePasses(this,()->showPage(0)));
    button(video,AppLanguage.text("Frame generation — Bloodframe", "Geração de quadros — Bloodframe"),()->FramegenSettings.show(this,null));
   }else if(page==1){LinearLayout patches=card(content,"PATCHES — inFAMOUS SECOND SON");patches.addView(BionicVideoSettings.content(this,2));
   }else if(page==2){
