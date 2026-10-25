@@ -3692,6 +3692,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         bool eligible = true;
         for (u32 i = 0; i < state.num_color_attachments; ++i) {
             if (!state.color_attachments[i].image_view) {
+                // A native secondary must not assume an attachment that is
+                // absent even when the graphics pipeline has a format for it.
+                eligible = false;
                 state.native_color_formats[i] = vk::Format::eUndefined;
                 continue;
             }

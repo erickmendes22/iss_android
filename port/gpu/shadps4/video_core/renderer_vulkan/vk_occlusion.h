@@ -43,6 +43,9 @@ public:
 
     void OnBeginRendering() override;
     void OnEndRendering() override;
+    bool AllowsSecondaryRendering() const noexcept override {
+        return open.empty() && !active;
+    }
 
     /// Begin dump: counts the samples of the following draws for the query at this address.
     /// Returns false when it cannot be counted (too many open queries).

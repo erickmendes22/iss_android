@@ -178,8 +178,11 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     };
 
     const bool use_secondary = native_secondary_enabled && recording_threaded &&
-                               !direct_mode && !rendering_observer &&
+                               !direct_mode &&
+                               (!rendering_observer ||
+                                rendering_observer->AllowsSecondaryRendering()) &&
                                new_state.native_eligible && !FullBarriers();
+    native_secondary_current_scope = use_secondary;
     if (!recording_threaded) {
         if (FullBarriers()) {
             RecordFullBarrier(current_cmdbuf);
@@ -243,6 +246,7 @@ void Scheduler::EndRendering() {
         rendering_observer->OnEndRendering();
     }
     is_rendering = false;
+    native_secondary_current_scope = false;
     const unsigned native_lane = parallel_lane;
     RecordPrimary([this, native_lane](vk::CommandBuffer primary) {
         auto& scope = native_secondary_scopes[native_lane];

@@ -10,10 +10,12 @@ class NativeSecondaryIntegration(unittest.TestCase):
   p=(ROOT/"port/gpu/shadps4/video_core/renderer_vulkan/vk_resource_pool.cpp").read_text()
   a=(ROOT/"android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
   for s in ['native_color_formats','native_depth_format','native_stencil_format',
-            'native_eligible', 'native_secondary_scopes','RecordPrimary(', 'EndRendering();']:
+            'native_eligible', 'native_secondary_scopes','RecordPrimary(', 'EndRendering();',
+            'IsNativeSecondaryRendering()']:
    self.assertIn(s,h)
   for s in ['eContentsSecondaryCommandBuffers','vk::CommandBufferInheritanceRenderingInfo',
-            'eRenderPassContinue','primary.executeCommands(scope.buffer)','!rendering_observer',
+            'eRenderPassContinue','primary.executeCommands(scope.buffer)',
+            'rendering_observer->AllowsSecondaryRendering()',
             'native_secondary_pools[native_lane]->Commit()']:
    self.assertIn(s,c)
   self.assertIn('state.native_eligible = eligible ? 1 : 0;',r)
@@ -21,4 +23,7 @@ class NativeSecondaryIntegration(unittest.TestCase):
   self.assertIn('.level = level,',p)
   self.assertIn('renderer_native_passes_arm64_secondary',a)
   self.assertIn('ISS_NATIVE_PASSES_ARM64_SECONDARY',a)
+  observer=(ROOT/"port/gpu/shadps4/video_core/renderer_vulkan/vk_occlusion.cpp").read_text()
+  self.assertIn('scheduler.IsNativeSecondaryRendering()',observer)
+  self.assertIn('scheduler.EndRendering();',observer)
 if __name__=='__main__':unittest.main()

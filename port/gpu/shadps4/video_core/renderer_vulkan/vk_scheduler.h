@@ -688,6 +688,9 @@ public:
     virtual void OnBeginRendering() = 0;
     /// The rendering scope is about to end.
     virtual void OnEndRendering() = 0;
+    // Observers with active GPU queries cannot inherit those queries in a
+    // secondary command buffer without the Vulkan inheritedQueries feature.
+    virtual bool AllowsSecondaryRendering() const noexcept { return false; }
 };
 
 class Scheduler {
@@ -944,6 +947,9 @@ public:
     [[nodiscard]] bool IsRendering() const noexcept {
         return is_rendering;
     }
+    [[nodiscard]] bool IsNativeSecondaryRendering() const noexcept {
+        return native_secondary_current_scope;
+    }
 
     /// tlg: see RenderingObserver (one at a time; nullptr removes it).
     void SetRenderingObserver(RenderingObserver* observer) noexcept {
@@ -1047,6 +1053,7 @@ private:
     std::array<NativeSecondaryScope, 2> native_secondary_scopes{};
     std::array<std::unique_ptr<CommandPool>, 2> native_secondary_pools{};
     bool native_secondary_enabled = false;
+    bool native_secondary_current_scope = false;
     std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
     unsigned parallel_lane = 0;
     size_t parallel_bytes = 0;
