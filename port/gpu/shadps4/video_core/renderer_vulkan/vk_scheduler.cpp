@@ -133,6 +133,10 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
         return;
     }
+    // Decide using the previous scope state. Once render_state is assigned,
+    // WillUseNativeSecondary would observe a matching open scope whose
+    // native_secondary_current_scope has just been reset by EndRendering().
+    const bool use_secondary = WillUseNativeSecondary(new_state);
     EndRendering();
     is_rendering = true;
     render_state = new_state;
@@ -181,10 +185,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .pStencilAttachment = db.has_stencil ? &stencil_attachment : nullptr,
     };
 
-    // The pre-draw binding decision and the rendering-scope decision must
-    // agree. Previously, all draws changed binding order whenever the global
-    // experimental switch was on, including ineligible primary-only passes.
-    const bool use_secondary = WillUseNativeSecondary(new_state);
+    // Keep exactly the same decision as the per-draw resource binding path.
     native_secondary_current_scope = use_secondary;
     if (native_secondary_enabled) {
         // Vulkan secondary command buffers inherit rendering attachments, NOT
