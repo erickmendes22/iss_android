@@ -19,6 +19,10 @@ final class BionicRendererSettings {
   env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
   env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
+  // Separate native-passes experimental branch. Scan-only until secondary
+  // Vulkan recording and register compatibility have their own validation.
+  env.put("ISS_NATIVE_PASSES_ARM64",
+      p.getBoolean("renderer_native_passes_arm64_scan",false) ? "1" : "0");
   // V2: use staged GPU->CPU copies for visibility instead of reading sparse
   // residency directly; prefetch recurring fault pages at fences to overlap waits.
   // Never apply this experiment to the proven Precise mode or plain Relaxed.
@@ -44,6 +48,14 @@ final class BionicRendererSettings {
   String[] keys={"renderer_dynamic_stride","renderer_real_occlusion","renderer_batch_gc","renderer_small_blocks"};
   String[] names={AppLanguage.text("Dynamic compute stride (smoke)","Stride dinâmico de compute (fumaça)"),AppLanguage.text("Real light occlusion","Oclusão real das luzes"),AppLanguage.text("Batched texture write-backs","Retorno de texturas em lote"),AppLanguage.text("Smaller memory blocks","Blocos menores de memória")};
   for(int i=0;i<keys.length;i++){final String key=keys[i];CheckBox control=new CheckBox(a);control.setText(names[i]);control.setChecked(p.getBoolean(key,true));control.setOnCheckedChangeListener((b,on)->p.edit().putBoolean(key,on).apply());panel.addView(control);}
+  CheckBox nativePassScan=new CheckBox(a);
+  nativePassScan.setText(AppLanguage.text(
+    "Native Passes ARM64 (experimental PM4 analysis only; no acceleration yet)",
+    "Native Passes ARM64 (análise experimental PM4; ainda sem aceleração)"));
+  nativePassScan.setChecked(p.getBoolean("renderer_native_passes_arm64_scan",false));
+  nativePassScan.setOnCheckedChangeListener((b,on)->
+      p.edit().putBoolean("renderer_native_passes_arm64_scan",on).apply());
+  panel.addView(nativePassScan);
   CheckBox hybrid=new CheckBox(a);
   hybrid.setText(AppLanguage.text("Experimental Relaxed + Precise read protection (smoke/powers; may reduce FPS)",
     "Experimental: Relaxed + proteção de leitura Precise (fumaça/poderes; pode reduzir FPS)"));

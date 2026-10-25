@@ -25,6 +25,7 @@
 #include "core/memory.h"
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/amdgpu/native_pass_submit.h"
 #include "tlg_write_log.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
@@ -823,6 +824,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         seq != NoSeq && rasterizer ? &rasterizer->GetDrawPreparation() : nullptr;
     if (draw_prep) {
         draw_prep->BeginSubmission(seq, regs, gfx_reg_checksum);
+    }
+    // The ISS PC submit-mode scans PM4 without installing x86 draw hooks.
+    // Observe only top-level submissions, never execute secondary command
+    // buffers until the ARM64/FEX Vulkan inheritance path is validated.
+    if (seq != NoSeq && NativePassSubmitScan::Enabled()) {
+        NativePassSubmitScan::Report(NativePassSubmitScan::Analyze(dcb));
     }
     static const bool dcb_stats = EmulatorSettingsImpl::Flag("TLG_DCB_STATS", false);
     const int dcb_depth = g_dcb_depth;
