@@ -34,6 +34,7 @@ jobs:
           path: .local-deps/android/bionic-development.keystore
           key: iss-bionic-development-signing-v1
       - name: Verify established release signing key
+        if: github.ref_name == 'experimental-bionic'
         run: |
           test -s .local-deps/android/bionic-development.keystore
           actual=$(keytool -exportcert -keystore .local-deps/android/bionic-development.keystore \
@@ -147,6 +148,7 @@ jobs:
         run: |
           python3 tools/android/bionic/verify_bionic.py --ndk "$ANDROID_HOME/ndk/29.0.14206865" --root out/bionic --complete
       - name: Assemble, sign and verify isolated inFAMOUS Bionic APK
+        if: github.ref_name == 'experimental-bionic'
         run: bash tools/android/bionic/build_apk.sh
       - name: Upload native Bionic libraries and driver metadata
         uses: actions/upload-artifact@v4
@@ -159,6 +161,7 @@ jobs:
             out/bionic/drivers/gen7/PINNED-DRIVER.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
+        if: github.ref_name == 'experimental-bionic'
         with:
           name: iss-android-bionic-apk-${{ github.sha }}
           path: |
