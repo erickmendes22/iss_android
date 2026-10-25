@@ -49,6 +49,10 @@ int main(){
   self.assertNotIn('scheduler.Wait(',body)
   scheduler=(ROOT/'port/gpu/shadps4/video_core/renderer_vulkan/vk_scheduler.cpp').read_text()
   end=method(scheduler,'void Scheduler::EndRendering(')
-  self.assertLess(end.index('OnEndRendering()'),end.index('cmdbuf.endRendering()'))
+  # The secondary path closes its child before ending primary rendering;
+  # the observer must still run first for both the original and secondary paths.
+  self.assertLess(end.index('OnEndRendering()'),end.index('primary.endRendering()'))
+  self.assertLess(end.index('primary.executeCommands(scope.buffer)'),
+                  end.index('primary.endRendering()'))
 
 if __name__=='__main__':unittest.main()
