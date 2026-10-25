@@ -183,6 +183,14 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
                                 rendering_observer->AllowsSecondaryRendering()) &&
                                new_state.native_eligible && !FullBarriers();
     native_secondary_current_scope = use_secondary;
+    if (native_secondary_enabled) {
+        // Vulkan secondary command buffers inherit rendering attachments, NOT
+        // dynamic state, vertex layouts, descriptor sets, or bound pipelines.
+        // Each fresh pass must re-emit the graphics-state commands into its
+        // own command buffer. Invalidate also when primary fallback is used.
+        dynamic_state.Invalidate();
+        vertex_input_state.Invalidate();
+    }
     if (!recording_threaded) {
         if (FullBarriers()) {
             RecordFullBarrier(current_cmdbuf);
@@ -247,6 +255,12 @@ void Scheduler::EndRendering() {
     }
     is_rendering = false;
     native_secondary_current_scope = false;
+    if (native_secondary_enabled) {
+        // The next graphics pass may execute on a different primary/secondary.
+        // Never reuse cached binding state across separate command buffers.
+        dynamic_state.Invalidate();
+        vertex_input_state.Invalidate();
+    }
     const unsigned native_lane = parallel_lane;
     RecordPrimary([this, native_lane](vk::CommandBuffer primary) {
         auto& scope = native_secondary_scopes[native_lane];

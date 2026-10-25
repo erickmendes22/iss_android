@@ -950,6 +950,9 @@ public:
     [[nodiscard]] bool IsNativeSecondaryRendering() const noexcept {
         return native_secondary_current_scope;
     }
+    [[nodiscard]] bool NativeSecondaryRequested() const noexcept {
+        return native_secondary_enabled;
+    }
 
     /// tlg: see RenderingObserver (one at a time; nullptr removes it).
     void SetRenderingObserver(RenderingObserver* observer) noexcept {

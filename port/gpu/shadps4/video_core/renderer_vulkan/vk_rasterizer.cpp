@@ -1139,11 +1139,14 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             ResolveIndexBuffer(index_offset);
         }
     }
-    EmitVertexBuffers();
-    if (is_indexed) {
-        EmitIndexBuffer();
+    const bool native_graphics = scheduler.NativeSecondaryRequested();
+    if (!native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
     }
 
+    // The outstanding memory barriers MUST be placed on the primary before
+    // vkCmdBeginRendering, even when secondary Vulkan recording is enabled.
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
@@ -1235,7 +1238,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    // Original path unchanged; Native Passes moves descriptor bindings into
+    // the secondary after vkCmdBeginRendering because the secondary does not
+    // inherit vkCmdBindDescriptorSets/vkCmdPushConstants from the primary.
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
@@ -1243,12 +1251,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, draw_prepared, &state, is_indexed, index_offset, nullptr);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        // Draw-scoped GPU state belongs to the exact command buffer that
+        // executes the draw. In particular, no graphics state is inherited
+        // from its parent primary by a Vulkan secondary command buffer.
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();
@@ -1387,9 +1404,13 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
 
-    BindVertexBuffers(pipeline);
-    if (is_indexed) {
-        BindIndexBuffer();
+    const bool native_graphics = scheduler.NativeSecondaryRequested();
+    if (native_graphics) {
+        ResolveVertexBuffers(pipeline, nullptr);
+        if (is_indexed) ResolveIndexBuffer(0);
+    } else {
+        BindVertexBuffers(pipeline);
+        if (is_indexed) BindIndexBuffer();
     }
 
     const auto [buffer, base] =
@@ -1422,17 +1443,25 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, nullptr, &state, is_indexed, 0, &indirect);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     ASSERT(stride == (is_indexed ? sizeof(VkDrawIndexedIndirectCommand)
                                  : sizeof(VkDrawIndirectCommand)));
