@@ -17,7 +17,7 @@ class ParallelRecordingTests(unittest.TestCase):
         code = (mapped.ROOT / "tools/android/runtime/cpp/parallel_recording.cpp").read_text()
         code = code.replace("// PRODUCTION_CHUNK", method(header, "class RecordChunk {") + ";")
         code = code.replace("// PRODUCTION_INLINE", "\n".join(("template <typename Func>\n" if s.startswith(("void Record(", "void RecordHostCopy(", "void AfterRecordingPrefix(")) else "template <typename T>\n" if s.startswith("std::span") else "") + method(header, s) for s in (
-            "void Record(Func&& func)", "void ReserveRecordData(", "std::span<const T> RecordData(",
+            "void Record(Func&& func)", "void RecordPrimary(Func&& func)", "void ReserveRecordData(", "std::span<const T> RecordData(",
             "void RecordHostCopy(Func&& copy)", "void AfterRecordingPrefix(", "vk::CommandBuffer CommandBuffer()",
             "void RequireHostReadBarrier(")))
         code = code.replace("// PRODUCTION_METHODS", "\n".join(method(source, s) for s in (

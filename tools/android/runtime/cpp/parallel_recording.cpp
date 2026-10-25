@@ -62,6 +62,9 @@ struct Scheduler {
     vk::PipelineStageFlags2 host_read_src_stages{};vk::AccessFlags2 host_read_src_access{};
     void FlushHostReadBarrier();
     bool recording_threaded=true,direct_mode=false,is_rendering=false;
+    bool native_secondary_enabled=false;
+    struct NativeScope { bool active=false; vk::CommandBuffer buffer{}; };
+    std::array<NativeScope,2> native_secondary_scopes{};
     RenderState render_state{1};
     vk::CommandBuffer current_cmdbuf{reinterpret_cast<VkCommandBuffer>(1)};
     struct State {unsigned invalidations=0;void Invalidate(){++invalidations;}}dynamic_state,vertex_input_state;
