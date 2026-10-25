@@ -63,6 +63,14 @@ struct RenderState {
     u16 num_layers;
     u16 num_color_attachments;
 
+    // Native Passes ARM64: exact pipeline formats for Vulkan dynamic-rendering
+    // secondary inheritance. Not included in render-state identity unless enabled.
+    std::array<vk::Format, 8> native_color_formats{};
+    vk::Format native_depth_format{vk::Format::eUndefined};
+    vk::Format native_stencil_format{vk::Format::eUndefined};
+    vk::SampleCountFlagBits native_samples{vk::SampleCountFlagBits::e1};
+    u32 native_eligible{0};
+
     bool operator==(const RenderState& other) const noexcept {
         return std::memcmp(this, &other, sizeof(RenderState)) == 0;
     }
@@ -765,6 +773,12 @@ public:
     /// KickRecording() or submission.
     [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
         CheckOwner(__builtin_return_address(0));
+        // A raw primary command call cannot execute inside a scope begun with
+        // eContentsSecondaryCommandBuffers. Close the scope before switching
+        // to direct mode, then the next DrawRecord begins another scope.
+        if (native_secondary_enabled && is_rendering) {
+            EndRendering();
+        }
         if (recording_threaded && !direct_mode) {
             SyncRecording();
             direct_mode = true;
@@ -794,6 +808,26 @@ public:
     /// everything it uses (capture by value): it may run later on the recording thread.
     template <typename Func>
     void Record(Func&& func) {
+        // The normal Record() path redirects Vulkan draw/bind state into the
+        // secondary while an eligible dynamic-rendering scope is active.
+        // BeginRendering/EndRendering use RecordPrimary() instead.
+        if (native_secondary_enabled && IsRecordingDeferred()) {
+            const unsigned lane = parallel_lane;
+            RecordPrimary([this, lane, fn = std::forward<Func>(func)](
+                              vk::CommandBuffer primary) mutable {
+                const vk::CommandBuffer active =
+                    native_secondary_scopes[lane].active
+                        ? native_secondary_scopes[lane].buffer
+                        : primary;
+                fn(active);
+            });
+            return;
+        }
+        RecordPrimary(std::forward<Func>(func));
+    }
+
+    template <typename Func>
+    void RecordPrimary(Func&& func) {
         CheckOwner(__builtin_return_address(0));
         if (!recording_threaded || direct_mode) {
             func(current_cmdbuf);
@@ -1006,6 +1040,13 @@ private:
     Semaphore work_semaphore;
     CommandPool command_pool;
     std::unique_ptr<CommandPool> parallel_pool;
+    struct NativeSecondaryScope {
+        vk::CommandBuffer buffer{};
+        bool active = false;
+    };
+    std::array<NativeSecondaryScope, 2> native_secondary_scopes{};
+    std::array<std::unique_ptr<CommandPool>, 2> native_secondary_pools{};
+    bool native_secondary_enabled = false;
     std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
     unsigned parallel_lane = 0;
     size_t parallel_bytes = 0;

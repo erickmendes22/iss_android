@@ -19,6 +19,10 @@ final class BionicRendererSettings {
   env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
   env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
+  // Real secondary Vulkan recording, separate from scan/hook and disabled by
+  // default. This is not yet the PC's reusable-material native pass cache.
+  env.put("ISS_NATIVE_PASSES_ARM64_SECONDARY",
+      p.getBoolean("renderer_native_passes_arm64_secondary",false) ? "1" : "0");
   // Optional FEX guest draw observation only. Disabled unless explicitly enabled
   // through this separate setting, which is not an acceleration switch.
   env.put("ISS_NATIVE_PASSES_ARM64_ENGINE_HOOK",
@@ -60,6 +64,14 @@ final class BionicRendererSettings {
   nativePassScan.setOnCheckedChangeListener((b,on)->
       p.edit().putBoolean("renderer_native_passes_arm64_scan",on).apply());
   panel.addView(nativePassScan);
+  CheckBox nativeSecondary=new CheckBox(a);
+  nativeSecondary.setText(AppLanguage.text(
+    "Native Vulkan secondary passes (experimental; 1x MSAA, fallback for incompatible passes)",
+    "Passes Vulkan secundários (experimental; 1x MSAA, fallback em passes incompatíveis)"));
+  nativeSecondary.setChecked(p.getBoolean("renderer_native_passes_arm64_secondary",false));
+  nativeSecondary.setOnCheckedChangeListener((b,on)->
+      p.edit().putBoolean("renderer_native_passes_arm64_secondary",on).apply());
+  panel.addView(nativeSecondary);
   CheckBox nativeGuestObserver=new CheckBox(a);
   nativeGuestObserver.setText(AppLanguage.text(
     "Native Passes FEX bridge (advanced observation only; may reduce FPS)",

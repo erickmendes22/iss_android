@@ -3683,6 +3683,36 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         state.height = proxy.height;
         target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
     }
+    // Exact formats inherited by secondary Vulkan commands. The existing
+    // graphics pipeline uses LiverpoolToVK::SurfaceFormat/DepthFormat. Restrict
+    // the pilot to ordinary 1x attachments, no mixed samples or feedback loops.
+    if (state.num_color_attachments <= state.native_color_formats.size() &&
+        key.num_samples == 1 && key.depth_samples <= 1 &&
+        !attachment_feedback_loop) {
+        bool eligible = true;
+        for (u32 i = 0; i < state.num_color_attachments; ++i) {
+            if (!state.color_attachments[i].image_view) {
+                state.native_color_formats[i] = vk::Format::eUndefined;
+                continue;
+            }
+            if (key.color_samples[i] > 1) eligible = false;
+            const auto& buffer = key.color_buffers[i];
+            state.native_color_formats[i] = instance.GetSupportedFormat(
+                LiverpoolToVK::SurfaceFormat(buffer.data_format, buffer.num_format),
+                vk::FormatFeatureFlagBits2::eColorAttachment);
+        }
+        if (state.depth_stencil_attachment.has_depth ||
+            state.depth_stencil_attachment.has_stencil) {
+            const auto depth_format = instance.GetSupportedFormat(
+                LiverpoolToVK::DepthFormat(key.z_format, key.stencil_format),
+                vk::FormatFeatureFlagBits2::eDepthStencilAttachment);
+            state.native_depth_format =
+                state.depth_stencil_attachment.has_depth ? depth_format : vk::Format::eUndefined;
+            state.native_stencil_format =
+                state.depth_stencil_attachment.has_stencil ? depth_format : vk::Format::eUndefined;
+        }
+        state.native_eligible = eligible ? 1 : 0;
+    }
     if (census_on) {
         std::array<const VideoCore::ImageInfo*, AmdGpu::NUM_COLOR_BUFFERS> colors{};
         for (u32 cb = 0; cb < state.num_color_attachments; ++cb) {
