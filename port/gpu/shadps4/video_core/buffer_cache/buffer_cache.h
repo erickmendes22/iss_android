@@ -54,7 +54,7 @@ class BufferCache {
     // tlg: arena pages are 4 GiB unless the driver's buffer size limit is lower (AMD's
     // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
-    static constexpr u64 MIN_ARENA_PAGE_BITS = 29;
+    static constexpr u64 MIN_ARENA_PAGE_BITS = 27; ///< 128 MiB pages for Mali.
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
@@ -150,6 +150,7 @@ private:
     }
 
     const Buffer* GetArena(u64 first_block, u64 last_block);
+    void MigrateBackedArenas(const Buffer* merged, u64 first_block, u64 end_block);
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
@@ -343,6 +344,7 @@ private:
     std::unique_ptr<Buffer> bda_pagetable_buffer;
 
     std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
+    bool non_sparse_arenas = false; ///< Experimental Mali path from Bloodborne.
     u64 arena_page_bits{MAX_ARENA_PAGE_BITS};
     /// tlg: pages one arena may join (the driver's buffer size limit / the page size, >= 2).
     u64 max_arena_pages{2};
