@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <numeric>
+#include <array>
 #include <string_view>
 
 #include "common/alignment.h"
@@ -28,6 +29,8 @@ std::string_view BufferTypeName(MemoryType type) {
         return "DeviceLocal";
     case MemoryType::Sparse:
         return "Sparse";
+    case MemoryType::Backed:
+        return "Backed";
     default:
         return "Invalid";
     }
@@ -106,6 +109,10 @@ void UniqueBuffer::Destroy() {
     } else if (buffer) {
         device.destroyBuffer(buffer);
     }
+    if (memory) {
+        device.freeMemory(memory);
+        memory = VK_NULL_HANDLE;
+    }
     buffer = VK_NULL_HANDLE;
     allocation = VK_NULL_HANDLE;
     bda_addr = 0;
@@ -114,7 +121,7 @@ void UniqueBuffer::Destroy() {
 void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                           VmaAllocationInfo* out_alloc_info) {
     const bool with_bda = bool(buffer_ci.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
-    if (mem_type != MemoryType::Sparse) {
+    if (mem_type != MemoryType::Sparse && mem_type != MemoryType::Backed) {
         const VmaAllocationCreateFlags bda_flag =
             with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
         const VmaAllocationCreateInfo alloc_ci = {
@@ -147,6 +154,39 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {} (size {:#x}, memory type {})",
                    vk::to_string(vk::Result{result}), buffer_ci.size, static_cast<int>(mem_type));
         buffer = vk::Buffer{unsafe_buffer};
+    } else if (mem_type == MemoryType::Backed) {
+        // Bloodborne Android: PanVK on Mali does not reliably support sparse binding.
+        buffer = Vulkan::Check(device.createBuffer(buffer_ci));
+        const auto reqs = device.getBufferMemoryRequirements(buffer);
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(allocator, &props);
+        std::array<u32, VK_MAX_MEMORY_TYPES> candidates{};
+        u32 count = 0;
+        for (bool prefer_local : {true, false}) {
+            for (u32 i = 0; i < props->memoryTypeCount; ++i) {
+                if (!(reqs.memoryTypeBits & (1u << i))) continue;
+                const bool local = bool(props->memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                if (local == prefer_local) candidates[count++] = i;
+            }
+        }
+        const vk::MemoryAllocateFlagsInfo flags_info{
+            .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+        };
+        vk::Result result = vk::Result::eErrorOutOfDeviceMemory;
+        for (u32 i = 0; i < count && !memory; ++i) {
+            const vk::MemoryAllocateInfo info{
+                .pNext = with_bda ? &flags_info : nullptr,
+                .allocationSize = reqs.size,
+                .memoryTypeIndex = candidates[i],
+            };
+            result = device.allocateMemory(&info, nullptr, &memory);
+            if (result != vk::Result::eSuccess) memory = VK_NULL_HANDLE;
+        }
+        ASSERT_MSG(memory, "PanVK non-sparse arena allocation {} MiB failed: {}",
+                   reqs.size >> 20, vk::to_string(result));
+        const auto bound = device.bindBufferMemory(buffer, memory, 0);
+        ASSERT_MSG(bound == vk::Result::eSuccess, "PanVK buffer binding failed: {}",
+                   vk::to_string(bound));
     } else {
         buffer_ci.flags |=
             vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
@@ -183,7 +223,7 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
     }
 
-    if (mem_type != MemoryType::Sparse) {
+    if (mem_type != MemoryType::Sparse && mem_type != MemoryType::Backed) {
         VkMemoryPropertyFlags property_flags{};
         vmaGetAllocationMemoryProperties(instance.GetAllocator(), buffer.allocation,
                                          &property_flags);
