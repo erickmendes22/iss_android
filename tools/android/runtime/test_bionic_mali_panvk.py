@@ -29,6 +29,23 @@ class MaliPanvkTests(unittest.TestCase):
         runtime = (JAVA / "BionicRuntimeInstaller.java").read_text()
         self.assertIn("drivers/panvk/libvulkan_panvk.so", runtime)
 
+    def test_bloodborne_non_sparse_mali_gpu_arenas(self):
+        cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        header = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.h").read_text()
+        buffer = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer.cpp").read_text()
+        vk = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_platform.h").read_text()
+        self.assertIn("non_sparse_arenas = instance.IsMali()", cache)
+        self.assertIn("non_sparse_arenas ? MemoryType::Backed : MemoryType::Sparse", cache)
+        self.assertIn("MigrateBackedArenas(new_arena", cache)
+        self.assertIn("void BufferCache::MigrateBackedArenas", cache)
+        self.assertIn("if (non_sparse_arenas) {", cache)
+        self.assertIn('ASSERT_MSG(pending_binds.empty()', cache)
+        self.assertIn("vk::DeviceMemory memory{}", (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer.h").read_text())
+        self.assertIn("device.bindBufferMemory(buffer, memory, 0)", buffer)
+        self.assertIn("device.freeMemory(memory)", buffer)
+        self.assertIn("static constexpr u64 MIN_ARENA_PAGE_BITS = 27", header)
+        self.assertIn("std::source_location::current()", vk)
+
     def test_real_shell_routing(self):
         src = (ROOT / "tools/android/bionic/run-bionic.sh").read_text()
         block = src[src.index("# Family-aware defaults:"):src.index('echo "ISS Android Bionic:')]
