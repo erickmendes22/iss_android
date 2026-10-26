@@ -2,6 +2,8 @@ name: inFAMOUS Second Son — Daedalus release build
 on:
   push:
     branches: [experimental-bionic, "experimental/v0.2-mali-panvk-bloodborne"]
+  pull_request:
+    branches: [experimental-bionic]
   workflow_dispatch:
 concurrency:
   group: iss-bionic-${{ github.ref }}
@@ -18,6 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Validate the pre-FSR PR head, never the FSR-containing PR merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
