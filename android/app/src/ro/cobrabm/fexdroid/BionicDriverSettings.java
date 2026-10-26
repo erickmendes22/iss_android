@@ -26,6 +26,12 @@ final class BionicDriverSettings {
   }
   return p.getString("bionic_driver","auto");
  }
+ /** Experimental PanVK from Bloodborne: Mali CSF, Android 15+. */
+ static boolean maliCandidate(){
+  if(Build.VERSION.SDK_INT<35 || !new File("/dev/mali0").exists() || new File("/dev/kgsl-3d0").exists())return false;
+  String soc=Build.VERSION.SDK_INT>=31&&Build.SOC_MANUFACTURER!=null?Build.SOC_MANUFACTURER.toLowerCase(java.util.Locale.ROOT):"";
+  return !soc.contains("qualcomm")&&!soc.equals("qti");
+ }
  static File customLibrary(Context c){
   String hash=c.getSharedPreferences("iss",0).getString("custom_driver_hash","");
   if(!hash.matches("[0-9a-f]{64}"))hash="missing";
@@ -35,20 +41,21 @@ final class BionicDriverSettings {
   SharedPreferences p=a.getSharedPreferences("iss",0);
   TextView label=new TextView(a);label.setText(AppLanguage.text("Vulkan driver · next game start","Driver Vulkan · próximo início"));parent.addView(label);
   String custom=p.getString("custom_driver_name",AppLanguage.text("None imported","Nenhum importado"));
-  String[] values={AppLanguage.text("Automatic · detect GPU (default)","Automático · detectar GPU (padrão)"),"Turnip Gen8 V38 Patched · Adreno 8xx","Turnip v27.0.0-R1 · Adreno 6xx / 7xx",AppLanguage.text("System Vulkan driver","Driver Vulkan do sistema"),AppLanguage.text("Imported: ","Importado: ")+custom};
-  String[] keys={"auto","gen8","gen7","system","custom"};
+  String[] values={AppLanguage.text("Automatic · detect GPU (default)","Automático · detectar GPU (padrão)"),"Turnip Gen8 V38 Patched · Adreno 8xx","Turnip v27.0.0-R1 · Adreno 6xx / 7xx",AppLanguage.text("PanVK 3.2 · Mali (Android 15+, experimental)","PanVK 3.2 · Mali (Android 15+, experimental)"),AppLanguage.text("System Vulkan driver","Driver Vulkan do sistema"),AppLanguage.text("Imported: ","Importado: ")+custom};
+  String[] keys={"auto","gen8","gen7","panvk","system","custom"};
   Spinner driver=new Spinner(a);driver.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,values));
   String selected=selection(a);int index=0;for(int i=0;i<keys.length;i++)if(keys[i].equals(selected))index=i;
   driver.setSelection(index);parent.addView(driver);
   driver.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
    public void onNothingSelected(AdapterView<?> view){}
    public void onItemSelected(AdapterView<?> parent,android.view.View view,int pos,long id){
-    if(pos==4&&!customLibrary(a).isFile()){driver.setSelection(0);return;}
+    if(pos==3&&!maliCandidate()){driver.setSelection(0);new AlertDialog.Builder(a).setMessage(AppLanguage.text("PanVK 3.2 requires Mali and Android 15+.","PanVK 3.2 exige Mali e Android 15+.")).setPositiveButton("OK",null).show();return;}
+    if(pos==5&&!customLibrary(a).isFile()){driver.setSelection(0);return;}
     p.edit().putString("bionic_driver",keys[pos]).putInt("driver_schema",2).apply();
    }
   });
   Button pick=new Button(a);pick.setText(AppLanguage.text("Import driver ZIP","Importar driver ZIP"));pick.setOnClickListener(v->choose(a));parent.addView(pick);
-  TextView note=new TextView(a);note.setText(AppLanguage.text("Automatic uses Gen8 V38 Patched on Adreno 8xx and v27 R1 on Adreno 6xx/7xx. Other GPUs use the system driver. Restart the game after changing drivers.","Automático usa Gen8 V38 Patched em Adreno 8xx e v27 R1 em Adreno 6xx/7xx. Outras GPUs usam o driver do sistema. Reinicie o jogo após trocar o driver."));parent.addView(note);
+  TextView note=new TextView(a);note.setText(AppLanguage.text("Automatic uses Gen8 V38 Patched on Adreno 8xx and v27 R1 on Adreno 6xx/7xx. Eligible Mali Android 15+ devices use experimental PanVK 3.2; others use the system driver. Restart after changing drivers.","Automático usa Gen8 V38 Patched em Adreno 8xx e v27 R1 em Adreno 6xx/7xx. Mali com Android 15+ usa PanVK 3.2 experimental; outros usam o driver do sistema. Reinicie após trocar."));parent.addView(note);
  }
  static void choose(Activity a){
   a.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/zip","application/x-zip-compressed","application/octet-stream"}).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),IMPORT_DRIVER);

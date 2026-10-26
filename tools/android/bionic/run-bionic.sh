@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# inFAMOUS Second Son — Daedalus Fork 0.1 on Android Bionic. No Debian/Xvfb/glibc.
+# inFAMOUS Second Son Daedalus v0.2 experimental Mali (Bionic; no FSR).
 set -eu
 files=${FXD_FILES:?ISS Bionic requires a private data directory}
 base="$files/issport"
@@ -35,7 +35,8 @@ mkdir -p "$TMPDIR" "$HOME/.fex-emu" "$HOME/.cache/fex-emu" "$base/user" "$base/o
 [ -x "$python" ] || { echo "Bionic Python executable missing" >&2; exit 127; }
 [ -x "$probe" ] || { echo "Bionic inFAMOUS probe missing" >&2; exit 127; }
 chip=$("$runtime/bin/kgsl-chip-id" 2>/dev/null || true)
-# Family-aware defaults: Gen8 on 8xx; v27 R1 on 6xx/7xx; system elsewhere.
+# Family-aware defaults: Adreno Turnip, eligible Mali PanVK, others system.
+mali_allowed=${ISS_MALI_ELIGIBLE:-0}
 case "${ISS_BIONIC_DRIVER:-auto}" in
  gen8) export ISS_VULKAN_DRIVER="$runtime/drivers/gen8/libvulkan_freedreno.so" ;;
  gen7) export ISS_VULKAN_DRIVER="$runtime/drivers/gen7/libvulkan_freedreno.so" ;;
@@ -44,11 +45,19 @@ case "${ISS_BIONIC_DRIVER:-auto}" in
    "$base"/custom-drivers/*/libvulkan_freedreno.so) export ISS_VULKAN_DRIVER="$ISS_CUSTOM_DRIVER" ;;
    *) echo "Invalid imported driver path" >&2; exit 4 ;;
   esac ;;
+ panvk)
+  [ "$mali_allowed" = 1 ] || { echo "PanVK requires Mali Android 15+" >&2; exit 4; }
+  export ISS_VULKAN_DRIVER="$runtime/drivers/panvk/libvulkan_panvk.so" ;;
  system) unset ISS_VULKAN_DRIVER ;;
  auto) case "$chip" in
    0x44??????) export ISS_VULKAN_DRIVER="$runtime/drivers/gen8/libvulkan_freedreno.so" ;;
    0x43??????|0x06??????) export ISS_VULKAN_DRIVER="$runtime/drivers/gen7/libvulkan_freedreno.so" ;;
-   *) unset ISS_VULKAN_DRIVER ;;
+   *)
+    if [ "$mali_allowed" = 1 ] && [ -s "$runtime/drivers/panvk/libvulkan_panvk.so" ]; then
+     export ISS_VULKAN_DRIVER="$runtime/drivers/panvk/libvulkan_panvk.so"
+    else
+     unset ISS_VULKAN_DRIVER
+    fi ;;
   esac ;;
  *) echo "Invalid Bionic Vulkan driver selection" >&2; exit 4 ;;
 esac
