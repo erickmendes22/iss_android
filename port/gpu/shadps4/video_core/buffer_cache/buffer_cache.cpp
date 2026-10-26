@@ -82,6 +82,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
 #endif
+    // Bloodborne PanVK compatibility: Mali's arena buffers own their memory.
+    non_sparse_arenas = instance.IsMali();
+    if (non_sparse_arenas) {
+        arena_page_bits = MIN_ARENA_PAGE_BITS;
+        std::printf("ISS Mali: 128 MiB non-sparse backed arenas; no vkQueueBindSparse\n");
+    }
     // tlg: TLG_MAX_BUFFER_MB lowers the driver's buffer size limit as the arenas see it
     // (diagnostics: reproduces AMD on Windows 2048, RADV 4095 on any GPU).
     u64 max_buffer = instance.GetMaxBufferSize();
@@ -105,8 +111,8 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 static_cast<unsigned long long>(max_arena_pages),
                 static_cast<unsigned long long>(max_buffer >> 20));
     const vk::BufferCreateInfo probe_ci = {
-        .flags =
-            vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency,
+        .flags = non_sparse_arenas ? vk::BufferCreateFlags{} :
+            (vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency),
         .size = arena_page_size,
         .usage = ARENA_USAGE,
         .sharingMode = vk::SharingMode::eExclusive,
@@ -122,14 +128,15 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     block_shift = std::bit_width(block_size) - 1;
     blocks_per_arena_page = arena_page_size / block_size;
     blocks_per_arena_page_shift = arena_page_bits - block_shift;
+    ASSERT_MSG(reqs.memoryTypeBits != 0, "No supported Vulkan memory type for buffer arenas");
     arena_memory_type_index =
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
-            .value();
+            .value_or(static_cast<u32>(std::countr_zero(reqs.memoryTypeBits)));
     const auto residency_flags =
         instance.GetMemoryProperties().memoryTypes[arena_memory_type_index].propertyFlags;
     residency_coherent = bool(residency_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-    mapped_readbacks_enabled = MappedReadbackPolicy() &&
+    mapped_readbacks_enabled = !non_sparse_arenas && MappedReadbackPolicy() &&
         bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
         (residency_coherent || instance.NonCoherentAtomSize() <= 4096);
     std::printf("GPU: mapped arena readback: %s (host-visible=%d coherent=%d atom=%llu)\n",
@@ -765,8 +772,12 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     }
     const u64 base_addr = lo << arena_page_bits;
     const u64 total_size = num_pages << arena_page_bits;
-    auto* new_arena = &arenas.emplace_back(instance, base_addr, total_size, MemoryType::Sparse);
-    if (any_arena) {
+    auto* new_arena = &arenas.emplace_back(instance, base_addr, total_size,
+                                           non_sparse_arenas ? MemoryType::Backed : MemoryType::Sparse);
+    if (any_arena && non_sparse_arenas) {
+        MigrateBackedArenas(new_arena, base_addr >> block_shift,
+                            (base_addr + total_size) >> block_shift);
+    } else if (any_arena) {
         LOG_WARNING(Render, "Migrating arena ({} pages of {} MiB)", num_pages, arena_page_size >> 20);
         const u64 base_block = base_addr >> block_shift;
         const u64 end_block = (base_addr + total_size) >> block_shift;
@@ -788,10 +799,100 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return new_arena;
 }
 
+void BufferCache::MigrateBackedArenas(const Buffer* merged, u64 first_block, u64 end_block) {
+    // Old arenas remain alive because earlier command buffers can still reference them.
+    struct Moved { u64 first, end; const Buffer* source; };
+    std::vector<Moved> moved;
+    resident_ranges.ForEachInRange(first_block, end_block, [&](const Backing& backing) {
+        const Buffer* source = nullptr;
+        for (const auto& old : arenas) {
+            if (&old != merged && old.BackingMemory() == backing.memory) {
+                source = &old;
+                break;
+            }
+        }
+        ASSERT_MSG(source, "Mali backed arena migration source was not found");
+        moved.push_back({std::max(first_block, backing.start),
+                         std::min(end_block, backing.end), source});
+    });
+    if (moved.empty()) return;
+    u64 count = 0;
+    for (const auto& range : moved) count += range.end - range.first;
+    const auto staging = staging_pool.Request(count * sizeof(vk::DeviceAddress),
+                                               MemoryType::HostUncached);
+    auto* addresses = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+    boost::container::small_vector<vk::BufferCopy, 8> table_copies;
+    u64 staging_offset = staging.offset;
+    for (const auto& range : moved) {
+        const u64 offset = (range.first << block_shift) - merged->cpu_addr;
+        for (u64 block = range.first; block < range.end; ++block)
+            *addresses++ = merged->BufferDeviceAddress() + offset +
+                           ((block - range.first) << block_shift);
+        const u64 bytes = (range.end - range.first) * sizeof(vk::DeviceAddress);
+        table_copies.emplace_back(staging_offset, range.first * sizeof(vk::DeviceAddress), bytes);
+        staging_offset += bytes;
+    }
+    for (const auto& range : moved) {
+        const std::array<vk::BufferCopy, 1> copies{vk::BufferCopy{
+            .srcOffset = (range.first << block_shift) - range.source->cpu_addr,
+            .dstOffset = (range.first << block_shift) - merged->cpu_addr,
+            .size = (range.end - range.first) << block_shift,
+        }};
+        runtime.CopyBuffer(range.source, merged, copies);
+    }
+    staging.Flush();
+    runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), table_copies);
+    // A migration is a new GPU write, so stale mapped readback ticks must not be reused.
+    for (const auto& range : moved) {
+        write_ticks.Write(range.first << block_shift,
+                          (range.end - range.first) << block_shift, scheduler.CurrentTick());
+        Backing backing;
+        backing.start = range.first;
+        backing.end = range.end;
+        backing.memory = merged->BackingMemory();
+        backing.offset = ((range.first << block_shift) - merged->cpu_addr) >> block_shift;
+        resident_ranges.Add(backing);
+    }
+}
+
 // tlg: from shadPS4-Infamous-FixBuild 4a206865 and 0c3fada0. Memory used to become resident a
 // block at a time, each range its own driver allocation and sparse bind; granules and chunks
 // make far fewer. When device memory runs out, old textures are freed and it is tried once more.
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+    if (non_sparse_arenas) {
+        // PanVK: the arena already has bound memory. Register block addresses without any
+        // additional VkDeviceMemory allocations or vkQueueBindSparse submissions.
+        IntervalList gaps;
+        u64 blocks = 0;
+        resident_ranges.ForEachGap(first_block, last_block + 1, [&](u64 start, u64 end) {
+            gaps.Add({start, end});
+            blocks += end - start;
+        });
+        if (!blocks) return;
+        const auto staging = staging_pool.Request(blocks * sizeof(vk::DeviceAddress),
+                                                   MemoryType::HostUncached);
+        auto* addresses = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+        boost::container::small_vector<vk::BufferCopy, 8> copies;
+        u64 offset = staging.offset;
+        for (const auto& range : gaps) {
+            const u64 resource_offset = (range.start << block_shift) - arena->cpu_addr;
+            const u64 bytes = (range.end - range.start) << block_shift;
+            Backing backing;
+            backing.start = range.start;
+            backing.end = range.end;
+            backing.memory = arena->BackingMemory();
+            backing.offset = resource_offset >> block_shift;
+            resident_ranges.Add(backing);
+            for (u64 b = 0; b < bytes; b += block_size)
+                *addresses++ = arena->BufferDeviceAddress() + resource_offset + b;
+            copies.emplace_back(offset, range.start * sizeof(vk::DeviceAddress),
+                                (range.end - range.start) * sizeof(vk::DeviceAddress));
+            offset += (range.end - range.start) * sizeof(vk::DeviceAddress);
+        }
+        staging.Flush();
+        runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+        return;
+    }
     // Granules never cross an arena page (1 GiB or more), so the widened range stays within the
     // arena.
     const u64 granule_blocks = std::max<u64>(RESIDENCY_GRANULE_SIZE >> block_shift, 1);
@@ -2231,6 +2332,10 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
 }
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
+    if (non_sparse_arenas) {
+        ASSERT_MSG(pending_binds.empty(), "PanVK non-sparse arena emitted a sparse bind");
+        return;
+    }
     if (pending_binds.empty()) {
         return;
     }
