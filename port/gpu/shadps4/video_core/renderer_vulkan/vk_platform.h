@@ -4,6 +4,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <source_location>
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -61,12 +62,16 @@ static void Check(vk::Result r) {
 }
 
 template <StringLiteral msg = "", typename T>
-static T Check(vk::ResultValue<T> r) {
+static T Check(vk::ResultValue<T> r,
+               const std::source_location site = std::source_location::current()) {
     if constexpr (msg.len <= 1) {
-        ASSERT_MSG(r.result == vk::Result::eSuccess, "vk::Result={}", vk::to_string(r.result));
+        ASSERT_MSG(r.result == vk::Result::eSuccess,
+                   "Vulkan {} in {}:{} ({})", vk::to_string(r.result), site.file_name(),
+                   site.line(), site.function_name());
     } else {
-        ASSERT_MSG(r.result == vk::Result::eSuccess, "Failed to {}: vk::Result={}", msg.value,
-                   vk::to_string(r.result));
+        ASSERT_MSG(r.result == vk::Result::eSuccess,
+                   "Failed to {}: Vulkan {} in {}:{} ({})", msg.value,
+                   vk::to_string(r.result), site.file_name(), site.line(), site.function_name());
     }
     return std::move(r.value);
 }
