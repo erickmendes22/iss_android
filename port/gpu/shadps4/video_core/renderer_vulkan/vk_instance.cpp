@@ -1073,13 +1073,19 @@ void Instance::CollectImageFormatInfo() {
         const vk::FormatFeatureFlags2 sampled_upload =
             vk::FormatFeatureFlagBits2::eSampledImage |
             vk::FormatFeatureFlagBits2::eTransferDst;
-        const auto bc1 = IsFormatSupported(vk::Format::eBc1RgbaUnormBlock, sampled_upload);
-        const auto bc3 = IsFormatSupported(vk::Format::eBc3UnormBlock, sampled_upload);
-        const auto bc5 = IsFormatSupported(vk::Format::eBc5UnormBlock, sampled_upload);
-        const auto bc7 = IsFormatSupported(vk::Format::eBc7UnormBlock, sampled_upload);
-        const auto astc = IsFormatSupported(vk::Format::eAstc4x4UnormBlock, sampled_upload);
-        const auto etc2 = IsFormatSupported(vk::Format::eEtc2R8G8B8UnormBlock, sampled_upload);
-        const auto eac = IsFormatSupported(vk::Format::eEacR11G11UnormBlock, sampled_upload);
+        const auto supported = [&](vk::Format format) {
+            // ASTC/ETC/EAC are not PS4 surface formats and hence are absent
+            // from the normal format_properties cache. Query the real driver.
+            const auto props = GetFormatProperties(physical_device, format);
+            return (props.optimalTilingFeatures & sampled_upload) == sampled_upload;
+        };
+        const auto bc1 = supported(vk::Format::eBc1RgbaUnormBlock);
+        const auto bc3 = supported(vk::Format::eBc3UnormBlock);
+        const auto bc5 = supported(vk::Format::eBc5UnormBlock);
+        const auto bc7 = supported(vk::Format::eBc7UnormBlock);
+        const auto astc = supported(vk::Format::eAstc4x4UnormBlock);
+        const auto etc2 = supported(vk::Format::eEtc2R8G8B8UnormBlock);
+        const auto eac = supported(vk::Format::eEacR11G11UnormBlock);
         LOG_INFO(Render_Vulkan,
                  "Mali compressed texture support: BC1={} BC3={} BC5={} BC7={} "
                  "ASTC4x4={} ETC2={} EAC_RG11={}; GPU BC transcoding=not enabled",
