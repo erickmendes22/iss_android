@@ -28,6 +28,19 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("vk_fsr4_android.cpp", str(next(GPU.glob("shadps4/video_core/renderer_vulkan/vk_fsr4_android.cpp"))))
         self.assertIn("FFX_VK_PORTABLE_OK", (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text())
 
+    def test_iss_fsr_scene_triangle_jitter_without_fullscreen_quad_regression(self):
+        rasterizer = (GPU / "shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp").read_text()
+        self.assertIn('const bool iss_fsr_scene_triangle =', rasterizer)
+        self.assertIn('TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3', rasterizer)
+        self.assertIn('std::popcount(pipeline->GetGraphicsKey().mrt_mask & 0xffu) >= 5', rasterizer)
+        self.assertIn('iss_fsr_scene_triangle))', rasterizer)
+        self.assertIn('db_desc.first == camera_motion->Depth()', rasterizer)
+        # A simple full-screen composite has one MRT and must remain unjittered.
+        for attachment_count, expected in ((1, False), (2, False), (4, False),
+                                           (5, True), (6, True)):
+            with self.subTest(attachment_count=attachment_count):
+                self.assertEqual(attachment_count >= 5, expected)
+
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
