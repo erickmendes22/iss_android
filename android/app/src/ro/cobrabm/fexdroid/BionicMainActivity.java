@@ -160,7 +160,11 @@ public final class BionicMainActivity extends Activity {
    else {setBusy(false);refresh();}return;
   }
   if(result!=RESULT_OK||data==null||data.getData()==null)return;
-  try{if(req==3){try(InputStream in=new FileInputStream(new File(getFilesDir(),"iss.log"));OutputStream out=getContentResolver().openOutputStream(data.getData())){byte[] b=new byte[65536];int n;while((n=in.read(b))>0)out.write(b,0,n);}return;}
+  try{if(req==3){
+    BionicLogDiagnostics.export(this,data.getData());
+    status.setText(AppLanguage.text("Readable diagnostic log exported.", "Log de diagnóstico legível exportado."));
+    return;
+   }
    if(req!=2)return;Uri uri=data.getData();String id=DocumentsContract.getTreeDocumentId(uri);int colon=id.indexOf(':');if(colon<0)throw new IOException(AppLanguage.text("Choose internal storage or an SD card.","Escolha o armazenamento interno ou um cartão SD."));
    String vol=id.substring(0,colon);File base="primary".equalsIgnoreCase(vol)?Environment.getExternalStorageDirectory():new File("/storage/"+vol);File dir=new File(base,id.substring(colon+1)).getCanonicalFile();
    if(!dir.toPath().startsWith(base.getCanonicalFile().toPath())||!new File(dir,"eboot.bin").canRead())throw new IOException(AppLanguage.text("No readable eboot.bin. Check permission and the selected folder.","eboot.bin inacessível. Verifique a permissão e a pasta escolhida."));
