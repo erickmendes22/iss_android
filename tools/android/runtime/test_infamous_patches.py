@@ -33,7 +33,10 @@ class InfamousPatchTests(unittest.TestCase):
     def test_catalog_and_conflicts(self):
         self.assertEqual(game_profile('CUSA00004')[2],'01.00')
         allpatch=ET.parse(XML).getroot().findall('Metadata')
-        self.assertEqual(len(allpatch),9)
+        # Nine original game patches plus one FSR-only SMAA bypass.
+        self.assertEqual(len(allpatch),10)
+        self.assertEqual(
+            sum(x.get('Name') == 'Disable native SMAA for FSR' for x in allpatch), 1)
         self.assertNotIn('Disable light beams',{x.get('Name') for x in allpatch})
         self.assertTrue(all(x.get('AppVer')=='01.00' for x in allpatch))
         self.assertEqual(selected_patches(XML,'01.00',''),[])
