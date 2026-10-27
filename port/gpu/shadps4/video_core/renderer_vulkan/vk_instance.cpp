@@ -1026,6 +1026,25 @@ void Instance::CollectPhysicalMemoryInfo() {
         total_memory_budget -= system_memory;
         return;
     }
+    if (IsMali()) {
+        // Mali uses shared Android RAM, not dedicated GPU VRAM. The previous
+        // integrated-GPU formula fell back to the ENTIRE local heap whenever the
+        // 8 GiB reserve was unavailable. On phones that treats Android's RAM as
+        // a GPU-only budget, encourages excessive image retention and can stall
+        // the whole OS under memory pressure.
+        const u64 available = total_memory_budget > device_initial_usage
+                                  ? total_memory_budget - device_initial_usage : 0;
+        const u64 reserve = std::max<u64>(total_memory_budget / 3, 2_GB);
+        const u64 after_reserve = available > reserve ? available - reserve
+                                                      : available / 2;
+        total_memory_budget = std::max<u64>(512_MB, std::min<u64>(after_reserve, 3_GB));
+        std::printf("ISS Mali: GPU cache budget %llu MiB, Android RAM reserve %llu MiB "
+                    "(driver available %llu MiB)\\n",
+                    static_cast<unsigned long long>(total_memory_budget >> 20),
+                    static_cast<unsigned long long>(reserve >> 20),
+                    static_cast<unsigned long long>(available >> 20));
+        return;
+    }
     // Leave at least 8 GB for the system on integrated GPUs.
     const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
     total_memory_budget =
