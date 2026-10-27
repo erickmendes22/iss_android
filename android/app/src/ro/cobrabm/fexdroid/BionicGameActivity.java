@@ -131,6 +131,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   String resolution=BionicVideoSettings.effectiveResolutionPatch(prefs);
   String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
   if(resolutionPatch!=null)patches.add(resolutionPatch);
+  // The game's native SMAA T2x already accumulates low-resolution frames.
+  // When FSR3 is enabled it must not run a second temporal AA pass on the
+  // FSR input. Keep all original resolution/depth/HUD routing unchanged.
+  // This is a separate experimental build and the flag is boot-only.
+  if(fsr3)patches.add("Disable native SMAA for FSR");
   if(prefs.getBoolean("patch_motion_blur",false))patches.add("Disable motion blur");
   if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
