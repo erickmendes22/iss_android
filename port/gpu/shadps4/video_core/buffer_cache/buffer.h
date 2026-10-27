@@ -72,7 +72,7 @@ struct UniqueBuffer {
     }
 
     void Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
-                VmaAllocationInfo* out_alloc_info);
+                VmaAllocationInfo* out_alloc_info, bool allow_over_budget);
 
     void Destroy();
 
