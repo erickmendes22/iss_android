@@ -1,7 +1,7 @@
 name: inFAMOUS Second Son — Daedalus release build
 on:
   push:
-    branches: [experimental-bionic, experimental-fsr-smaa-bypass]
+    branches: [experimental-bionic, experimental-fsr-smaa-bypass, experimental-fsr-depth-match]
   workflow_dispatch:
 concurrency:
   group: iss-bionic-${{ github.ref }}
