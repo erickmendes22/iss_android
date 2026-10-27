@@ -51,7 +51,13 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
    out.write("inFAMOUS Second Son — Daedalus 0.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.getFD().sync();
   }catch(Exception ignored){}
+  // Never expose a native stdout mirror left over from an older game session.
+  try(FileOutputStream mirror=new FileOutputStream(new File(files,"iss-native.log"),false)){
+   mirror.write("Native stdout not started for this session yet.\n".getBytes(StandardCharsets.UTF_8));
+   mirror.getFD().sync();
+  }catch(IOException ex){record("Native log mirror initialization failed: "+ex);}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
   frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
@@ -67,6 +73,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   frame.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or_,ob)->updateVideoSize());
   frame.post(this::updateVideoSize);
   surface.getHolder().addCallback(this);
+  BionicLogDiagnostics.mark(this,"activity-ready","Android game activity initialized; native process not launched yet");
   record("Activity initialized");
  }
  private void applyFullscreen(){
@@ -102,6 +109,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   e.put("ISS_APP_LANGUAGE",AppLanguage.gameLanguage());
   e.put("ISS_BIONIC","1");e.put("ISS_ANDROID_INPUT","1");
   e.put("ISS_BIONIC_DRIVER",BionicDriverSettings.selection(this));
+   e.put("ISS_MALI_ELIGIBLE",BionicDriverSettings.maliCandidate()?"1":"0");
   e.put("ISS_CUSTOM_DRIVER",BionicDriverSettings.customLibrary(this).getPath());
   String outputResolution=BionicVideoSettings.outputResolution(getSharedPreferences("iss",0));
   String[] dimensions=outputResolution.split("x");
@@ -147,6 +155,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{
    String result=IssPresent.start(h,base+"/present.sock","stretch".equals(screenMode));
    record(result);
+   BionicLogDiagnostics.mark(this,"presenter-initialized",result);
    updateDisplayRate();
    if(!result.startsWith("bridge running:")){error(result);return;}
    audio.start();if(!audio.awaitReady(5000)){error(AppLanguage.text("Audio FIFO did not start","O áudio FIFO não iniciou"));return;}
@@ -156,13 +165,26 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
      synchronized(this){
       if(destroyed||restarting)return;
       record("Executing native Bionic inFAMOUS");
+      BionicLogDiagnostics.mark(this,"native-launch-requested","Launching run-bionic.sh");
       game=process("/system/bin/sh",base+"/run-bionic.sh");
+      BionicLogDiagnostics.mark(this,"native-process-started","Bionic process started successfully");
      }
      try{
-     try(InputStream in=game.getInputStream();FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
-      byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
+     try(InputStream in=game.getInputStream();
+         FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true);
+         FileOutputStream mirror=new FileOutputStream(new File(files,"iss-native.log"),false)){
+      mirror.write("Bionic native stdout mirror · session start\n".getBytes(StandardCharsets.UTF_8));
+      byte[] buf=new byte[65536];int n;
+      while((n=in.read(buf))!=-1){
+       out.write(buf,0,n);
+       mirror.write(buf,0,n);
+      }
+      out.getFD().sync();
+      mirror.getFD().sync();
      }
-     int exit=game.waitFor();record("Bionic game exited "+exit);
+     int exit=game.waitFor();
+     BionicLogDiagnostics.mark(this,"native-exited","Exit code: "+exit);
+     record("Bionic game exited "+exit);
      if(!destroyed&&!restarting)error(AppLanguage.text("Game stopped (","O jogo parou (")+exit+AppLanguage.text("). Export log.","). Exporte o log."));
      }finally{
       // Hold the save lock until the native writer has actually exited, even on Activity teardown.
@@ -171,7 +193,10 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
       for(;;)try{game.waitFor();break;}catch(InterruptedException e){interrupted=true;}
       if(interrupted)Thread.currentThread().interrupt();
      }
-    }catch(Exception ex){if(!destroyed)error(ex.toString());}
+    }catch(Exception ex){
+     BionicLogDiagnostics.mark(this,"launcher-exception",ex.toString());
+     if(!destroyed)error(ex.toString());
+    }
    });
    poll();
   }catch(Exception ex){error(ex.toString());}
@@ -204,10 +229,18 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   showGraffitiGuideIfRequested();
   long n=IssPresent.frames();
   if(!failed&&n>0)status.setVisibility(View.GONE);
-  if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
+  if(n>0&&lastFrames<0){
+   BionicLogDiagnostics.mark(this,"native-frames-presented","First Android AHardwareBuffer frames received");
+   record("Bionic direct AHardwareBuffer frames active");lastFrames=n;
+  }
   main.postDelayed(this::poll,1000);
  }
- private void error(String message){failed=true;record("ERROR: "+message);main.post(()->{status.setText(message);status.setVisibility(View.VISIBLE);});}
+ private void error(String message){
+  failed=true;
+  BionicLogDiagnostics.mark(this,"error",message);
+  record("ERROR: "+message);
+  main.post(()->{status.setText(message);status.setVisibility(View.VISIBLE);});
+ }
  @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int ht){}
  @Override public void surfaceDestroyed(SurfaceHolder h){}
  private void restartGame(){

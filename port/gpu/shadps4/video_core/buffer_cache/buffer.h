@@ -33,6 +33,7 @@ enum class MemoryType : u8 {
     HostCached,   ///< Requires a host visible memory type optimized for GPU to CPU readbacks
     Stream,       ///< Requests device local host visible buffer, falling back host memory.
     Sparse,       ///< Requires an unbacked sparse resident buffer.
+    Backed,       ///< Dedicated, non-sparse buffer arena for Mali PanVK.
 };
 
 constexpr vk::BufferUsageFlags ReadFlags =
@@ -54,7 +55,8 @@ struct UniqueBuffer {
         : device{other.device}, buffer{std::exchange(other.buffer, VK_NULL_HANDLE)},
           bda_addr{std::exchange(other.bda_addr, 0)},
           allocator{std::exchange(other.allocator, VK_NULL_HANDLE)},
-          allocation{std::exchange(other.allocation, VK_NULL_HANDLE)} {}
+          allocation{std::exchange(other.allocation, VK_NULL_HANDLE)},
+          memory{std::exchange(other.memory, VK_NULL_HANDLE)} {}
 
     UniqueBuffer& operator=(UniqueBuffer&& other) noexcept {
         if (this != &other) {
@@ -64,12 +66,13 @@ struct UniqueBuffer {
             bda_addr = std::exchange(other.bda_addr, 0);
             allocator = std::exchange(other.allocator, VK_NULL_HANDLE);
             allocation = std::exchange(other.allocation, VK_NULL_HANDLE);
+            memory = std::exchange(other.memory, VK_NULL_HANDLE);
         }
         return *this;
     }
 
     void Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
-                VmaAllocationInfo* out_alloc_info);
+                VmaAllocationInfo* out_alloc_info, bool allow_over_budget);
 
     void Destroy();
 
@@ -78,6 +81,7 @@ struct UniqueBuffer {
     vk::DeviceAddress bda_addr{};
     VmaAllocator allocator;
     VmaAllocation allocation{};
+    vk::DeviceMemory memory{}; ///< Owned device allocation for Backed arena.
 };
 
 struct Buffer {
@@ -109,6 +113,7 @@ struct Buffer {
     vk::Buffer Handle() const noexcept {
         return buffer.buffer;
     }
+    vk::DeviceMemory BackingMemory() const noexcept { return buffer.memory; }
 
     vk::DeviceAddress BufferDeviceAddress() const noexcept {
         ASSERT_MSG(buffer.bda_addr != 0, "Can't get BDA from a non BDA buffer");

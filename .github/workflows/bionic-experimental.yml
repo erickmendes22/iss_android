@@ -1,6 +1,8 @@
 name: inFAMOUS Second Son — Daedalus release build
 on:
   push:
+    branches: [experimental-bionic, "experimental/v0.2-mali-panvk-bloodborne"]
+  pull_request:
     branches: [experimental-bionic]
   workflow_dispatch:
 concurrency:
@@ -18,6 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Validate the pre-FSR PR head, never the FSR-containing PR merge.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
@@ -101,6 +105,11 @@ jobs:
           test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
           python3 tools/android/bionic/stage_driver.py --manifest tools/android/bionic/driver-gen7.json --output out/bionic/drivers/gen7
           test -s out/bionic/drivers/gen7/libvulkan_freedreno.so
+      - name: Stage Bloodborne PanVK v3.2 for Mali
+        shell: bash -el {0}
+        run: |
+          python3 tools/android/bionic/stage_panvk.py --output out/bionic/drivers/panvk
+          test -s out/bionic/drivers/panvk/libvulkan_panvk.so
       - name: Restore reusable Android Bionic dependency prefix
         id: bionic-deps-cache
         uses: actions/cache/restore@v4
@@ -157,6 +166,7 @@ jobs:
             out/bionic/lib/libtlggpu.so
             out/bionic/drivers/gen8/PINNED-DRIVER.json
             out/bionic/drivers/gen7/PINNED-DRIVER.json
+            out/bionic/drivers/panvk/PINNED-DRIVER.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:

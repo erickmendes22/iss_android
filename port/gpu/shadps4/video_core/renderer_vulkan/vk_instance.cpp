@@ -342,10 +342,30 @@ bool Instance::CreateDevice() {
                "Required Vulkan extension unavailable: {}", VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 
     const auto robustness2_features = feature_chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
-    ASSERT_MSG(robustness2_features.robustBufferAccess2,
-               "Required Vulkan feature unavailable: robustBufferAccess2");
-    ASSERT_MSG(robustness2_features.robustImageAccess2,
-               "Required Vulkan feature unavailable: robustImageAccess2");
+    // Bloodborne Android Mali fix: PanVK CSF (including G610) can lack
+    // robustBufferAccess2 and robustImageAccess2. Use core robustBufferAccess
+    // and Vulkan 1.3 robustImageAccess on Mali only; do not enable unavailable features.
+    bool enable_robust_buffer_access2 = true;
+    bool enable_robust_image_access2 = true;
+    if (IsMali()) {
+        enable_robust_buffer_access2 = robustness2_features.robustBufferAccess2;
+        enable_robust_image_access2 = robustness2_features.robustImageAccess2;
+        if (!enable_robust_buffer_access2) {
+            ASSERT_MSG(features.robustBufferAccess,
+                       "Mali requires core robustBufferAccess without robustBufferAccess2");
+            LOG_INFO(Render_Vulkan, "Mali: falling back to core robustBufferAccess");
+        }
+        if (!enable_robust_image_access2) {
+            ASSERT_MSG(feature_chain.get<vk::PhysicalDeviceVulkan13Features>().robustImageAccess,
+                       "Mali requires Vulkan 1.3 robustImageAccess without robustImageAccess2");
+            LOG_INFO(Render_Vulkan, "Mali: falling back to Vulkan 1.3 robustImageAccess");
+        }
+    } else {
+        ASSERT_MSG(robustness2_features.robustBufferAccess2,
+                   "Required Vulkan feature unavailable: robustBufferAccess2");
+        ASSERT_MSG(robustness2_features.robustImageAccess2,
+                   "Required Vulkan feature unavailable: robustImageAccess2");
+    }
     ASSERT_MSG(robustness2_features.nullDescriptor,
                "Required Vulkan feature unavailable: nullDescriptor");
 
@@ -643,8 +663,8 @@ bool Instance::CreateDevice() {
             .depthClipEnable = true,
         },
         vk::PhysicalDeviceRobustness2FeaturesEXT{
-            .robustBufferAccess2 = true,
-            .robustImageAccess2 = true,
+            .robustBufferAccess2 = enable_robust_buffer_access2,
+            .robustImageAccess2 = enable_robust_image_access2,
             .nullDescriptor = true,
         },
         vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT{
@@ -1006,6 +1026,25 @@ void Instance::CollectPhysicalMemoryInfo() {
         total_memory_budget -= system_memory;
         return;
     }
+    if (IsMali()) {
+        // Mali uses shared Android RAM, not dedicated GPU VRAM. The previous
+        // integrated-GPU formula fell back to the ENTIRE local heap whenever the
+        // 8 GiB reserve was unavailable. On phones that treats Android's RAM as
+        // a GPU-only budget, encourages excessive image retention and can stall
+        // the whole OS under memory pressure.
+        const u64 available = total_memory_budget > device_initial_usage
+                                  ? total_memory_budget - device_initial_usage : 0;
+        const u64 reserve = std::max<u64>(total_memory_budget / 3, 2_GB);
+        const u64 after_reserve = available > reserve ? available - reserve
+                                                      : available / 2;
+        total_memory_budget = std::max<u64>(512_MB, std::min<u64>(after_reserve, 3_GB));
+        std::printf("ISS Mali: GPU cache budget %llu MiB, Android RAM reserve %llu MiB "
+                    "(driver available %llu MiB)\n",
+                    static_cast<unsigned long long>(total_memory_budget >> 20),
+                    static_cast<unsigned long long>(reserve >> 20),
+                    static_cast<unsigned long long>(available >> 20));
+        return;
+    }
     // Leave at least 8 GB for the system on integrated GPUs.
     const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
     total_memory_budget =
@@ -1026,6 +1065,32 @@ void Instance::CollectImageFormatInfo() {
     supports_block_texel_view = block_texel_view_props.result == vk::Result::eSuccess;
     LOG_INFO(Render_Vulkan, "Block Texel View support: {}",
              supports_block_texel_view ? "Yes" : "No");
+    if (IsMali()) {
+        // PanVK may or may not expose BC texture sampling on a given Mali.
+        // MaliBridge/panDXVK BC->ETC2/ASTC/EAC transcoding is useful only when
+        // BC is absent or expanded to plain RGBA. Do not transcode an already
+        // supported compressed format or misinterpret BC uploads as ASTC blocks.
+        const vk::FormatFeatureFlags2 sampled_upload =
+            vk::FormatFeatureFlagBits2::eSampledImage |
+            vk::FormatFeatureFlagBits2::eTransferDst;
+        const auto supported = [&](vk::Format format) {
+            // ASTC/ETC/EAC are not PS4 surface formats and hence are absent
+            // from the normal format_properties cache. Query the real driver.
+            const auto props = GetFormatProperties(physical_device, format);
+            return (props.optimalTilingFeatures & sampled_upload) == sampled_upload;
+        };
+        const auto bc1 = supported(vk::Format::eBc1RgbaUnormBlock);
+        const auto bc3 = supported(vk::Format::eBc3UnormBlock);
+        const auto bc5 = supported(vk::Format::eBc5UnormBlock);
+        const auto bc7 = supported(vk::Format::eBc7UnormBlock);
+        const auto astc = supported(vk::Format::eAstc4x4UnormBlock);
+        const auto etc2 = supported(vk::Format::eEtc2R8G8B8UnormBlock);
+        const auto eac = supported(vk::Format::eEacR11G11UnormBlock);
+        LOG_INFO(Render_Vulkan,
+                 "Mali compressed texture support: BC1={} BC3={} BC5={} BC7={} "
+                 "ASTC4x4={} ETC2={} EAC_RG11={}; GPU BC transcoding=not enabled",
+                 bc1, bc3, bc5, bc7, astc, etc2, eac);
+    }
 
     // Check and log format support details.
     for (const auto& format : LiverpoolToVK::SurfaceFormats()) {

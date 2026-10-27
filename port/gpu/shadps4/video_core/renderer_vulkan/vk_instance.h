@@ -335,6 +335,11 @@ public:
         return properties.vendorID;
     }
 
+    /// ARM Mali vendor ID, including PanVK (from Bloodborne Android).
+    bool IsMali() const {
+        return properties.vendorID == 0x13B5;
+    }
+
     /// Returns the device ID of the physical device
     u32 GetDeviceID() const {
         return properties.deviceID;

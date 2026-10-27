@@ -71,6 +71,19 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
         std::max<u64>(std::min(device_local_memory - min_vacancy_critical, min_spacing_critical),
                       DEFAULT_CRITICAL_GC_MEMORY));
     trigger_gc_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
+    if (instance.IsMali()) {
+        // Textures and arena backing allocations share Android system RAM.
+        // Previously critical collection was never reached below 3 GiB
+        // because DEFAULT_CRITICAL_GC_MEMORY overrode the calculated cap.
+        const u64 budget = instance.GetTotalMemoryBudget();
+        trigger_gc_memory = std::min<u64>(trigger_gc_memory, budget / 3);
+        pressure_gc_memory = std::min<u64>(pressure_gc_memory, budget * 55 / 100);
+        critical_gc_memory = std::min<u64>(critical_gc_memory, budget * 70 / 100);
+        LOG_INFO(Render_Vulkan,
+                 "Mali shared-RAM texture GC: trigger {} MiB, pressure {} MiB, critical {} MiB",
+                 trigger_gc_memory >> 20, pressure_gc_memory >> 20,
+                 critical_gc_memory >> 20);
+    }
     // tlg (shadPS4-Infamous-FixBuild 0c3fada0): buffer memory becomes resident in large ranges
     // (16 MB granules, gigabytes when a save loads) that the collector, running once per
     // submission and only freeing old images, can't make room for in time. On small discrete

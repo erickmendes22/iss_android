@@ -109,7 +109,7 @@ void UniqueImage::Destroy() {
     }
 }
 
-void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
+void UniqueImage::Create(const vk::ImageCreateInfo& image_ci, bool allow_over_budget) {
     this->image_ci = image_ci;
     ASSERT(!image);
     const VmaAllocationCreateInfo alloc_ci = {
@@ -126,7 +126,7 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget) {
         // tlg: see UniqueBuffer::Create: past the budget, the driver moves memory out instead of
         // failing (shadPS4-Infamous-FixBuild e656365e).
         LOG_WARNING(Render_Vulkan, "Allocating an image went over the memory budget, allocating "
@@ -260,7 +260,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                       vk::to_string(flags).c_str(), vk::to_string(usage_flags).c_str(),
                       (unsigned long long)info.guest_address);
     }
-    backing->image.Create(image_ci);
+    backing->image.Create(image_ci, !instance.IsMali());
     if (host_1d) {
         TLG_IMG_TRACE("created 1D image %p\n", (void*)VkImage(backing->image.image));
     }

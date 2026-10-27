@@ -67,7 +67,8 @@ def main():
                         "version": version, "source_commit": commit,
                         "game": "inFAMOUS Second Son",
                         "drivers": {"gen8": json.loads((ROOT / "tools/android/bionic/driver.json").read_text()),
-                                    "gen7": json.loads((ROOT / "tools/android/bionic/driver-gen7.json").read_text())}},
+                                    "gen7": json.loads((ROOT / "tools/android/bionic/driver-gen7.json").read_text()),
+                                    "panvk": json.loads((SRC / "drivers/panvk/PINNED-DRIVER.json").read_text())}},
                        indent=2) + "\n")
         archive = OUT / "iss-bionic-runtime.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=6) as tar:
