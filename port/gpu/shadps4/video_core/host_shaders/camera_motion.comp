@@ -80,7 +80,12 @@ void main() {
         // all uncovered pixels receive native camera reprojected motion.
         if (mode == 3u) {
             const vec4 object_motion = texelFetch(object_tex, pixel, 0);
-            const float threshold = max(2e-7, (1.0 - depth) * 0.01);
+            // ISS uses reversed-Z: near ~= 1, far ~= 0. Old (1-depth) gave
+            // distant geometry a tolerance close to 0.01, accepting unrelated
+            // object motion at a different depth and smearing FSR history.
+            // Compare relative to actual reversed depth, like the non-ISS
+            // camera path does for its forward-Z convention.
+            const float threshold = max(2e-7, depth * 0.01);
             if (object_motion.b > 0.99 &&
                 abs(object_motion.a - depth) < threshold &&
                 !any(isnan(object_motion.rg)) &&
@@ -93,7 +98,9 @@ void main() {
     }
     if (mode == 2u) {
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
-        const float depth_threshold = max(2e-7, (1.0 - depth) * 0.01);
+        // Reversed-Z is shared by object-only fallback and native-camera
+        // motion. A stale foreground vector must not win over camera motion.
+        const float depth_threshold = max(2e-7, depth * 0.01);
         vec2 result = vec2(0.0);
         if (object_motion.b > 0.99 &&
             abs(object_motion.a - depth) < depth_threshold &&
