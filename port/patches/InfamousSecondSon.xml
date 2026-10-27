@@ -71,6 +71,19 @@
             <Line Type="mask" Address="BA 08 07 00 00 0F 44 DE 0F 44 C6" Offset="1" Value="68010000" />
         </PatchList>
     </Metadata>
+    <!-- ISS FSR3: preserve original scene/depth/UI pipeline, bypass ONLY the
+         native game's SMAA stage. These two x86-64 instructions were verified
+         against the uploaded PS4 SELF (CUSA00004 / 01.00) and each mask has
+         exactly one match. Never enable outside the Android FSR3 launcher. -->
+    <Metadata Title="inFAMOUS Second Son" Name="Disable native SMAA for FSR" Note="FSR3 only: disables the game's additional SMAA T2x pass so the reconstructed image is not temporally filtered twice. Original game render path and resolution patches are unchanged. Experimental, requires visual validation." Author="Daedalus Fork" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <!-- constructor default: [rdi+0x245] 0 -> 1; offset 13 is the immediate -->
+            <Line Type="mask" Address="C6 87 44 02 00 00 00 C6 87 45 02 00 00 00 C7 87 48 02 00 00" Offset="13" Value="01" />
+            <!-- property setter: store constant true instead of source sil,
+                 keeping 7 instruction bytes and the original dirty flag -->
+            <Line Type="mask" Address="40 88 B7 45 02 00 00 80 8F F7 00 00 00 08 C3" Offset="0" Value="C6874502000001" />
+        </PatchList>
+    </Metadata>
     <Metadata Title="inFAMOUS Second Son" Name="Disable motion blur" Note="Forces the engine's own motion-blur-off path and skips the blur passes/composite plus the second post chain from the upstream patch." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="0F 85 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 80 38 00 0F 85 ?? ?? ?? ??" Offset="0" Value="E98B04000090" />
