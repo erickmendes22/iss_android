@@ -1065,6 +1065,26 @@ void Instance::CollectImageFormatInfo() {
     supports_block_texel_view = block_texel_view_props.result == vk::Result::eSuccess;
     LOG_INFO(Render_Vulkan, "Block Texel View support: {}",
              supports_block_texel_view ? "Yes" : "No");
+    if (IsMali()) {
+        // PanVK may or may not expose BC texture sampling on a given Mali.
+        // MaliBridge/panDXVK BC->ETC2/ASTC/EAC transcoding is useful only when
+        // BC is absent or expanded to plain RGBA. Do not transcode an already
+        // supported compressed format or misinterpret BC uploads as ASTC blocks.
+        const vk::FormatFeatureFlags2 sampled_upload =
+            vk::FormatFeatureFlagBits2::eSampledImage |
+            vk::FormatFeatureFlagBits2::eTransferDst;
+        const auto bc1 = IsFormatSupported(vk::Format::eBc1RgbaUnormBlock, sampled_upload);
+        const auto bc3 = IsFormatSupported(vk::Format::eBc3UnormBlock, sampled_upload);
+        const auto bc5 = IsFormatSupported(vk::Format::eBc5UnormBlock, sampled_upload);
+        const auto bc7 = IsFormatSupported(vk::Format::eBc7UnormBlock, sampled_upload);
+        const auto astc = IsFormatSupported(vk::Format::eAstc4x4UnormBlock, sampled_upload);
+        const auto etc2 = IsFormatSupported(vk::Format::eEtc2R8G8B8UnormBlock, sampled_upload);
+        const auto eac = IsFormatSupported(vk::Format::eEacR11G11UnormBlock, sampled_upload);
+        LOG_INFO(Render_Vulkan,
+                 "Mali compressed texture support: BC1={} BC3={} BC5={} BC7={} "
+                 "ASTC4x4={} ETC2={} EAC_RG11={}; GPU BC transcoding=not enabled",
+                 bc1, bc3, bc5, bc7, astc, etc2, eac);
+    }
 
     // Check and log format support details.
     for (const auto& format : LiverpoolToVK::SurfaceFormats()) {
