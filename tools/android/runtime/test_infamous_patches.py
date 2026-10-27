@@ -39,6 +39,36 @@ class InfamousPatchTests(unittest.TestCase):
         self.assertEqual(selected_patches(XML,'01.00',''),[])
         with self.assertRaisesRegex(ValueError,'choose one resolution'):
             selected_patches(XML,'01.00','Render resolution 1280x720;Render resolution 1600x900')
+    def test_fsr_only_native_smaa_bypass_patch(self):
+        root = ET.parse(XML).getroot()
+        entries = [m for m in root.findall('Metadata')
+                   if m.get('Name') == 'Disable native SMAA for FSR']
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.get('AppVer'), '01.00')
+        self.assertEqual(entry.get('isEnabled'), 'false')
+        lines = entry.findall('.//Line')
+        self.assertEqual(len(lines), 2)
+        self.assertEqual([x.get('Offset') for x in lines], ['13', '0'])
+        self.assertEqual([x.get('Value') for x in lines], ['01', 'C6874502000001'])
+        # In the original x86-64 constructor the 0x245 byte defaults to zero;
+        # force one, and force the property setter to store one as well.
+        original = bytes.fromhex('C6 87 44 02 00 00 00 C6 87 45 02 00 00 00 '
+                                 'C7 87 48 02 00 00 40 88 B7 45 02 00 00 '
+                                 '80 8F F7 00 00 00 08 C3')
+        patched = bytearray(original)
+        for line in lines:
+            mask = bytes(mask_tokens(line.get('Address')))
+            self.assertEqual(original.count(mask), 1)
+            offset = original.index(mask) + int(line.get('Offset'), 0)
+            data = bytes.fromhex(line.get('Value'))
+            patched[offset:offset+len(data)] = data
+        self.assertEqual(patched[7:14], bytes.fromhex('C6874502000001'))
+        self.assertEqual(patched[20:27], bytes.fromhex('C6874502000001'))
+        launcher = (ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java').read_text()
+        self.assertIn('if(fsr3)patches.add("Disable native SMAA for FSR")', launcher)
+        self.assertNotIn('ISS_FSR_PRE_TAA_720', launcher)
+
     def test_regions_and_verified_executable_version_gate(self):
         expected=game_profile('CUSA00004')
         for title in ('CUSA00223','CUSA00263'):
