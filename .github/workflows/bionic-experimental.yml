@@ -1,7 +1,7 @@
 name: inFAMOUS Second Son — Daedalus release build
 on:
   push:
-    branches: [experimental-bionic]
+    branches: [experimental-bionic, experimental-fsr-smaa-bypass]
   workflow_dispatch:
 concurrency:
   group: iss-bionic-${{ github.ref }}
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 180
     env:
       ISS_JOBS: '2'
-      ISS_RELEASE_BUILD: '1'
+      ISS_RELEASE_BUILD: '0'  # disposable side-by-side APK, original release signing untouched
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,16 +29,11 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
-      - uses: actions/cache@v4
-        with:
-          path: .local-deps/android/bionic-development.keystore
-          key: iss-bionic-development-signing-v1
-      - name: Verify established release signing key
+      # Feature branch only: no original signing key and a separate Android package.
+      - name: Verify isolated test signing
         run: |
-          test -s .local-deps/android/bionic-development.keystore
-          actual=$(keytool -exportcert -keystore .local-deps/android/bionic-development.keystore \
-            -storepass android -alias iss-bionic-dev | sha256sum | cut -d ' ' -f 1)
-          test "$actual" = "$(cat tools/android/bionic/signing-certificate.sha256)"
+          test "$ISS_RELEASE_BUILD" = 0
+          test ! -e .local-deps/android/bionic-development.keystore
       - name: Check Bionic Android launcher Java compilation
         run: |
           mkdir -p out/android-bionic-classes
