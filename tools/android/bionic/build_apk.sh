@@ -46,7 +46,7 @@ apk="$PWD/out/release/inFAMOUS-Second-Son-Daedalus-v${version}.apk"
 "$bt/apksigner" sign --ks "$key" --ks-key-alias iss-bionic-dev \
   --ks-pass pass:android --key-pass pass:android --out "$apk" "$work/aligned.apk"
 "$bt/apksigner" verify --verbose "$apk"
-"$bt/aapt" dump badging "$apk" | grep -F "package: name='com.daedalus.iss.smaa'"
+"$bt/aapt" dump badging "$apk" | grep -F "package: name='com.daedalus.iss.depthmatch'"
 for member in assets/runtime.tar.gz assets/runtime.sha256 lib/arm64-v8a/libisspresent.so classes.dex; do
   unzip -Z1 "$apk" | grep -qx "$member"
 done
