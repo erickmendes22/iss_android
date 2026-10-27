@@ -41,6 +41,28 @@ class BionicFsr3Tests(unittest.TestCase):
             with self.subTest(attachment_count=attachment_count):
                 self.assertEqual(attachment_count >= 5, expected)
 
+    def test_iss_reversed_z_object_motion_depth_rejection(self):
+        shader = (GPU / "shadps4/video_core/host_shaders/camera_motion.comp").read_text()
+        # Both native-camera+object (3) and object-only fallback (2) must use
+        # reversed-Z, where distant geometry has depth close to zero.
+        self.assertIn("const float threshold = max(2e-7, depth * 0.01);", shader)
+        self.assertIn("const float depth_threshold = max(2e-7, depth * 0.01);", shader)
+        self.assertNotIn("(1.0 - depth) * 0.01", shader)
+        for scene_depth, stale_depth, should_accept in (
+            (0.001, 0.006, False),   # distant object behind a foreground surface
+            (0.01, 0.012, False),
+            (0.05, 0.06, False),
+            (0.5, 0.501, True),      # 1% precision budget
+            (0.0001, 0.0001001, True),
+            (0.0001, 0.0003, False),
+        ):
+            with self.subTest(scene_depth=scene_depth, stale_depth=stale_depth):
+                threshold = max(2e-7, scene_depth * 0.01)
+                self.assertEqual(abs(stale_depth - scene_depth) < threshold,
+                                 should_accept)
+        self.assertLess(max(2e-7, 0.001 * 0.01),
+                        max(2e-7, (1.0 - 0.001) * 0.01) / 100)
+
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
