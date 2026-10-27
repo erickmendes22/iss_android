@@ -1039,7 +1039,7 @@ void Instance::CollectPhysicalMemoryInfo() {
                                                       : available / 2;
         total_memory_budget = std::max<u64>(512_MB, std::min<u64>(after_reserve, 3_GB));
         std::printf("ISS Mali: GPU cache budget %llu MiB, Android RAM reserve %llu MiB "
-                    "(driver available %llu MiB)\\n",
+                    "(driver available %llu MiB)\n",
                     static_cast<unsigned long long>(total_memory_budget >> 20),
                     static_cast<unsigned long long>(reserve >> 20),
                     static_cast<unsigned long long>(available >> 20));
