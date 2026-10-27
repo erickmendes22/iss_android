@@ -53,6 +53,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    out.write("inFAMOUS Second Son — Daedalus 0.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
    out.getFD().sync();
   }catch(Exception ignored){}
+  // Never expose a native stdout mirror left over from an older game session.
+  try(FileOutputStream mirror=new FileOutputStream(new File(files,"iss-native.log"),false)){
+   mirror.write("Native stdout not started for this session yet.\n".getBytes(StandardCharsets.UTF_8));
+   mirror.getFD().sync();
+  }catch(IOException ex){record("Native log mirror initialization failed: "+ex);}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
   frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
