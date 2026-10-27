@@ -250,6 +250,7 @@ final class LanguageCatalogTrPl {
   {"PanVK 3.2 · Mali (Android 15+, experimental)","PanVK 3.2 · Mali (Android 15+, deneysel)","PanVK 3.2 · Mali (Android 15+, eksperymentalny)"},
   {"PanVK 3.2 requires Mali and Android 15+.","PanVK 3.2 için Mali ve Android 15+ gerekir.","PanVK 3.2 wymaga Mali i Androida 15 lub nowszego."},
   {"Automatic uses Gen8 V38 Patched on Adreno 8xx and v27 R1 on Adreno 6xx/7xx. Eligible Mali Android 15+ devices use experimental PanVK 3.2; others use the system driver. Restart after changing drivers.","Otomatik seçim Adreno 8xx için Gen8 V38 Patched, Adreno 6xx/7xx için v27 R1 ve Android 15+ destekli Mali için deneysel PanVK 3.2 kullanır. Diğer GPU'larda sistem sürücüsü kullanılır. Değişiklikten sonra oyunu yeniden başlatın.","Automatyczny wybór używa Gen8 V38 Patched na Adreno 8xx, v27 R1 na Adreno 6xx/7xx i eksperymentalnego PanVK 3.2 na zgodnych Mali z Androidem 15+. Inne GPU używają sterownika systemowego. Po zmianie uruchom grę ponownie."},
+  {"Readable diagnostic log exported.","Okunabilir tanılama günlüğü dışa aktarıldı.","Wyeksportowano czytelny dziennik diagnostyczny."},
   {"Driver file is too large.","Sürücü dosyası çok büyük.","Plik sterownika jest za duży."},
   {"Expected ELF64 little-endian Android driver","64 bit little-endian ELF Android sürücüsü bekleniyor","Oczekiwano 64-bitowego sterownika ELF Android (little-endian)"},
   {"Expected AArch64 shared library","AArch64 paylaşımlı kitaplığı bekleniyor","Oczekiwano biblioteki współdzielonej AArch64"},
