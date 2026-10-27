@@ -119,7 +119,7 @@ void UniqueBuffer::Destroy() {
 }
 
 void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
-                          VmaAllocationInfo* out_alloc_info) {
+                          VmaAllocationInfo* out_alloc_info, bool allow_over_budget) {
     const bool with_bda = bool(buffer_ci.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
     if (mem_type != MemoryType::Sparse && mem_type != MemoryType::Backed) {
         const VmaAllocationCreateFlags bda_flag =
@@ -138,7 +138,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         VkBuffer unsafe_buffer{};
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
-        if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget) {
             // tlg: from shadPS4-Infamous-FixBuild e656365e. The budget shrinks as other programs
             // take video memory, and going over it ended the game. Past it the driver moves
             // memory out to system memory instead: slower, but the game keeps going.
@@ -214,7 +214,7 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         .sharingMode = vk::SharingMode::eExclusive,
     };
     VmaAllocationInfo alloc_info{};
-    buffer.Create(buffer_ci, mem_type, &alloc_info);
+    buffer.Create(buffer_ci, mem_type, &alloc_info, !instance.IsMali());
 
     const auto device = instance.GetDevice();
     if (!debug_name.empty()) {
