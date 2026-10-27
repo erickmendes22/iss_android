@@ -1278,8 +1278,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
+#ifdef ISS_ANDROID_BIONIC
+    // inFAMOUS frequently emits small (3/6-index) draws inside its >=5-MRT
+    // scene G-buffer. Excluding them from the host viewport jitter while
+    // telling FSR3 that the *entire* frame was jittered makes the FSR history
+    // sample these surfaces at the wrong subpixel positions. Detect actual
+    // scene MRTs rather than relaxing the full-screen-quad guard globally.
+    const bool iss_fsr_scene_triangle =
+        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        std::popcount(pipeline->GetGraphicsKey().mrt_mask & 0xffu) >= 5;
+#else
+    constexpr bool iss_fsr_scene_triangle = false;
+#endif
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&
-        (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
+        (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1 ||
+         iss_fsr_scene_triangle)) {
         draw_jitter = upscaler->Jitter();
     }
     UpdateDynamicState(pipeline, is_indexed);
