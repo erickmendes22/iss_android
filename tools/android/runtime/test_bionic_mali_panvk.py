@@ -81,6 +81,13 @@ class MaliPanvkTests(unittest.TestCase):
         self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget", image)
         self.assertIn("buffer.Create(buffer_ci, mem_type, &alloc_info, !instance.IsMali())", source)
         self.assertIn("backing->image.Create(image_ci, !instance.IsMali())", image)
+        for source, expected in (
+            ("vk_object_motion.cpp", "}, !instance.IsMali());"),
+            ("vk_runtime.cpp", "new_backing->image.Create(new_image_ci, !instance.IsMali());"),
+            ("vk_scene_resolution.cpp", "entry->image.Create(ci, !instance.IsMali());"),
+        ):
+            text = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan" / source).read_text()
+            self.assertIn(expected, text)
 
     def test_real_shell_routing(self):
         src = (ROOT / "tools/android/bionic/run-bionic.sh").read_text()
