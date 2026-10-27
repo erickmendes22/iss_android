@@ -74,6 +74,14 @@ class MaliPanvkTests(unittest.TestCase):
                        'eEacR11G11UnormBlock'):
             self.assertIn(format, source)
 
+    def test_mali_never_bypasses_vma_device_budget(self):
+        source = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer.cpp").read_text()
+        image = (ROOT / "port/gpu/shadps4/video_core/texture_cache/image.cpp").read_text()
+        self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget", source)
+        self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget", image)
+        self.assertIn("buffer.Create(buffer_ci, mem_type, &alloc_info, !instance.IsMali())", source)
+        self.assertIn("backing->image.Create(image_ci, !instance.IsMali())", image)
+
     def test_real_shell_routing(self):
         src = (ROOT / "tools/android/bionic/run-bionic.sh").read_text()
         block = src[src.index("# Family-aware defaults:"):src.index('echo "ISS Android Bionic:')]
