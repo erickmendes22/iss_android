@@ -46,6 +46,34 @@ class MaliPanvkTests(unittest.TestCase):
         self.assertIn("static constexpr u64 MIN_ARENA_PAGE_BITS = 27", header)
         self.assertIn("std::source_location::current()", vk)
 
+    def test_mali_merges_release_completed_old_backing_memory(self):
+        cpp = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        self.assertIn("std::vector<Buffer*> obsolete_mali_arenas", cpp)
+        self.assertIn("MigrateBackedArenas(new_arena", cpp)
+        self.assertIn("scheduler.Finish();", cpp)
+        self.assertIn("old->buffer.Destroy()", cpp)
+        self.assertIn("refusing unsafe reclaim", cpp)
+        self.assertIn("segmented large-buffer support required", cpp)
+
+    def test_mali_shared_ram_budget_and_early_texture_gc(self):
+        vulkan = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_instance.cpp").read_text()
+        textures = (ROOT / "port/gpu/shadps4/video_core/texture_cache/texture_cache.cpp").read_text()
+        self.assertIn("if (IsMali()) {", vulkan)
+        self.assertIn("total_memory_budget / 3, 2_GB", vulkan)
+        self.assertIn("after_reserve", vulkan)
+        self.assertIn("pressure_gc_memory = std::min<u64>", textures)
+        self.assertIn("critical_gc_memory = std::min<u64>", textures)
+
+    def test_astc_viability_is_queried_without_unsafe_format_remap(self):
+        source = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_instance.cpp").read_text()
+        self.assertIn('Mali compressed texture support:', source)
+        self.assertIn('GPU BC transcoding=not enabled', source)
+        self.assertIn('GetFormatProperties(physical_device, format)', source)
+        for format in ('eBc1RgbaUnormBlock', 'eBc7UnormBlock',
+                       'eAstc4x4UnormBlock', 'eEtc2R8G8B8UnormBlock',
+                       'eEacR11G11UnormBlock'):
+            self.assertIn(format, source)
+
     def test_real_shell_routing(self):
         src = (ROOT / "tools/android/bionic/run-bionic.sh").read_text()
         block = src[src.index("# Family-aware defaults:"):src.index('echo "ISS Android Bionic:')]
