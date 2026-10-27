@@ -1,10 +1,10 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.daedalus.iss.smaa" android:versionCode="17" android:versionName="0.2">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.daedalus.iss.depthmatch" android:versionCode="17" android:versionName="0.2">
 <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="28"/>
 <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
 <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
 <uses-feature android:name="android.hardware.gamepad" android:required="false"/>
-<application android:isGame="true" android:appCategory="game" android:icon="@drawable/infamous" android:roundIcon="@drawable/infamous" android:label="inFAMOUS SMAA Test — Daedalus" android:theme="@style/InfamousTheme" android:allowBackup="false" android:extractNativeLibs="true" android:requestLegacyExternalStorage="true">
+<application android:isGame="true" android:appCategory="game" android:icon="@drawable/infamous" android:roundIcon="@drawable/infamous" android:label="inFAMOUS FSR Depth Test" android:theme="@style/InfamousTheme" android:allowBackup="false" android:extractNativeLibs="true" android:requestLegacyExternalStorage="true">
 <activity android:name="ro.cobrabm.fexdroid.BionicMainActivity" android:configChanges="orientation|screenSize|keyboardHidden" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
 <activity android:name="ro.cobrabm.fexdroid.BionicGameActivity" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden" android:exported="false"/>
 </application></manifest>
