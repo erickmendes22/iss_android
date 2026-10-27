@@ -767,8 +767,16 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     }
 
     bool any_arena = false;
+    std::vector<Buffer*> obsolete_mali_arenas;
     for (u64 page = lo; page <= hi; ++page) {
-        any_arena |= address_space[page] != nullptr;
+        const Buffer* old = address_space[page];
+        any_arena |= old != nullptr;
+        if (non_sparse_arenas && old &&
+            std::ranges::find(obsolete_mali_arenas, old) == obsolete_mali_arenas.end()) {
+            // deque-backed Buffer addresses are stable. Reclaim only after the GPU has
+            // executed copies out of all replaced buffers.
+            obsolete_mali_arenas.push_back(const_cast<Buffer*>(old));
+        }
     }
     const u64 base_addr = lo << arena_page_bits;
     const u64 total_size = num_pages << arena_page_bits;
@@ -795,6 +803,42 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     }
     for (u64 page = lo; page <= hi; ++page) {
         address_space[page] = new_arena;
+    }
+    if (non_sparse_arenas && !obsolete_mali_arenas.empty()) {
+        // Critical fix: the first Mali port copied an old arena to a new one but
+        // never destroyed the old backing allocations. Every 128/256/384 MiB
+        // merge permanently increased the phone's shared GPU/RAM consumption.
+        //
+        // A GPU submission may still reference the old VkBuffers and their
+        // BDAs. Finish *after* scheduling the copies and new BDA table writes,
+        // and release them only once the GPU has completed those operations.
+        scheduler.Finish();
+        u64 reclaimed_bytes = 0;
+        for (Buffer* old : obsolete_mali_arenas) {
+            // Do not free an arena that is still mapped by a guest VA page.
+            const bool still_active =
+                std::ranges::find(address_space, static_cast<const Buffer*>(old)) !=
+                address_space.end();
+            if (still_active) continue;
+            const auto old_memory = old->BackingMemory();
+            if (!old_memory) continue;
+            bool still_resident = false;
+            for (const auto& backing : resident_ranges) {
+                if (backing.memory == old_memory) {
+                    still_resident = true;
+                    break;
+                }
+            }
+            ASSERT_MSG(!still_resident,
+                       "Mali old arena has remaining resident blocks; refusing unsafe reclaim");
+            reclaimed_bytes += old->SizeBytes();
+            old->buffer.Destroy();
+        }
+        if (reclaimed_bytes != 0) {
+            std::printf("ISS Mali: retired completed arena buffers; freed %llu MiB of "
+                        "duplicate GPU memory\n",
+                        static_cast<unsigned long long>(reclaimed_bytes >> 20));
+        }
     }
     return new_arena;
 }
