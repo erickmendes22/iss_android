@@ -780,6 +780,18 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     }
     const u64 base_addr = lo << arena_page_bits;
     const u64 total_size = num_pages << arena_page_bits;
+    if (non_sparse_arenas) {
+        // A single multi-GiB vkAllocateMemory() on shared Android RAM can hang
+        // Mali/kbase and the entire phone. Reject unsupportable guest spans
+        // *before* calling PanVK: the full BDA buffer-mapping fallback for such
+        // ranges has not been implemented and claiming success would be unsafe.
+        const u64 budget = instance.GetTotalMemoryBudget();
+        const u64 safe_single_arena = std::min<u64>(1_GB, std::max<u64>(256_MB, budget / 2));
+        ASSERT_MSG(total_size <= safe_single_arena,
+                   "Mali non-sparse arena request {} MiB exceeds shared-RAM safety "
+                   "limit {} MiB; segmented large-buffer support required",
+                   total_size >> 20, safe_single_arena >> 20);
+    }
     auto* new_arena = &arenas.emplace_back(instance, base_addr, total_size,
                                            non_sparse_arenas ? MemoryType::Backed : MemoryType::Sparse);
     if (any_arena && non_sparse_arenas) {
