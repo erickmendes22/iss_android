@@ -2290,13 +2290,6 @@ void TemporalUpscaler::RunScaled() {
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{depth_image, source_width, source_height, 4, "depth", "f32",
                          vk::ImageAspectFlagBits::eDepth}});
-            // For the same two-frame request, also save the LATE guest depth
-            // so the source-vs-HUD reuse can be confirmed pixel-for-pixel.
-            if (depth_image != depth.GetImage()) {
-                DumpImages(instance, scheduler, cmdbuf, dump,
-                           {{depth.GetImage(), source_width, source_height, 4,
-                             "late_depth", "f32", vk::ImageAspectFlagBits::eDepth}});
-            }
         }
 #endif
     }
