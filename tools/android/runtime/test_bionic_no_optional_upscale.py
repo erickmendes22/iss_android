@@ -86,6 +86,32 @@ class BionicFsr3Tests(unittest.TestCase):
         # Different Android application IDs and ephemeral signatures are forbidden.
         manifest = (ROOT / "android/app/BionicAndroidManifest.xml").read_text()
         self.assertIn('package="com.daedalus.iss.bionic"', manifest)
+    def test_iss_fsr3_snapshots_scene_depth_before_hud_reuse(self):
+        src = GPU / "shadps4/video_core/renderer_vulkan"
+        header = (src / "vk_temporal_upscaler.h").read_text()
+        renderer = (src / "vk_temporal_upscaler.cpp").read_text()
+        self.assertIn("void SnapshotIssSceneDepth(VideoCore::ImageId depth);", header)
+        self.assertIn("iss_scene_depth_snapshot_valid = false;", renderer)
+        self.assertIn("SnapshotIssSceneDepth(camera_motion.Depth());", renderer)
+        self.assertIn("const bool saved_scene_depth = iss_scene_depth_snapshot_valid", renderer)
+        self.assertIn("depth_image = vk::Image(iss_scene_depth_image);", renderer)
+        self.assertIn("depth_view = *iss_scene_depth_view;", renderer)
+        self.assertIn("vk::ImageLayout::eTransferSrcOptimal", renderer)
+        self.assertIn("vk::ImageLayout::eTransferDstOptimal", renderer)
+        self.assertIn("cmd.copyImage(depth.GetImage(), vk::ImageLayout::eTransferSrcOptimal", renderer)
+        self.assertIn("vk::ImageAspectFlagBits::eDepth", renderer)
+        self.assertIn("camera_motion.RecordMotion(cmdbuf, depth_view, *motion_view, w, h);", renderer)
+        self.assertIn("info.depth = Describe(depth_image, depth_format", renderer)
+        self.assertIn('{depth_image, source_width, source_height, 4, "depth", "f32",', renderer)
+        # Only ISS native Bionic scaled FSR3 is changed. Never trigger the old
+        # early UI/HDR path that previously caused zero temporal dispatches.
+        self.assertIn("scaled_session && Active()", renderer)
+        self.assertNotIn("ISS_FSR_EARLY_HUD", renderer)
+        self.assertNotIn("ISS_FSR_PRE_TAA_720", renderer)
+        # Leave the installed package and signing identity intact.
+        self.assertIn('package="com.daedalus.iss.bionic"',
+            (ROOT / 'android/app/BionicAndroidManifest.xml').read_text())
+
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
