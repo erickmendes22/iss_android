@@ -78,7 +78,10 @@ class MaliPanvkTests(unittest.TestCase):
         source = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer.cpp").read_text()
         image = (ROOT / "port/gpu/shadps4/video_core/texture_cache/image.cpp").read_text()
         self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget", source)
-        self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget", image)
+        self.assertIn("result == VK_ERROR_OUT_OF_DEVICE_MEMORY && safe_over_budget", image)
+        self.assertIn("vmaGetPhysicalDeviceProperties(allocator, &device_props)", image)
+        self.assertIn("device_props->vendorID != 0x13B5", image)
+        self.assertIn("bool allow_over_budget = true", (ROOT / "port/gpu/shadps4/video_core/texture_cache/image.h").read_text())
         self.assertIn("buffer.Create(buffer_ci, mem_type, &alloc_info, !instance.IsMali())", source)
         self.assertIn("backing->image.Create(image_ci, !instance.IsMali())", image)
         for source, expected in (
