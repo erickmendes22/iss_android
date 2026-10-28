@@ -147,6 +147,12 @@ private:
     void RunUiOnly(VideoCore::ImageId color, VideoCore::ImageId depth);
     void EnsureUiResources(u32 width, u32 height, vk::Format color, vk::Format depth);
     void PrepareUiDepth(VideoCore::ImageId depth);
+#ifdef ISS_ANDROID_BIONIC
+    // Preserve real G-buffer scene depth at the first HDR lighting pass.
+    // The game later clears/reuses the depth attachment for on-screen UI;
+    // reading it at RunScaled() otherwise supplies HUD shapes to FSR3.
+    void SnapshotIssSceneDepth(VideoCore::ImageId depth);
+#endif
     /// Render size below the scaled-preset output size (the resolution patch is on).
     [[nodiscard]] bool Scaled() const;
     /// A target of the patched render size: the game allocates it with aligned dimensions
@@ -223,6 +229,13 @@ private:
     bool ui_read_barrier = false;
     VideoCore::UniqueImage ui_image;
     VideoCore::UniqueImage ui_depth_image;
+#ifdef ISS_ANDROID_BIONIC
+    VideoCore::UniqueImage iss_scene_depth_image;
+    vk::UniqueImageView iss_scene_depth_view;
+    vk::Format iss_scene_depth_format = vk::Format::eUndefined;
+    u32 iss_scene_depth_width = 0, iss_scene_depth_height = 0;
+    bool iss_scene_depth_snapshot_valid = false;
+#endif
     vk::UniqueImageView ui_view;
     vk::UniqueImageView ui_depth_view;
     bool depth_blit = false;
