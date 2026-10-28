@@ -245,6 +245,21 @@ bool TemporalUpscaler::ReactiveOn() const {
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
 #ifdef ISS_ANDROID_BIONIC
     ++android_fsr_probe.scene_colors;
+    // At the first HDR lighting pass the geometry depth is still valid.
+    // Subsequent passes reuse that same guest D32S8 image for HUD primitives,
+    // destroying the per-pixel scene depth before RunScaled() normally reads it.
+    if (scaled_session && Active() &&
+        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        !iss_scene_depth_snapshot_valid && camera_motion.Depth()) {
+        const auto& scene = texture_cache.GetImage(color);
+        const auto& depth = texture_cache.GetImage(camera_motion.Depth());
+        if (scene.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
+            RenderTarget(scene.info.size.width, scene.info.size.height) &&
+            scene.info.size.width == depth.info.size.width &&
+            scene.info.size.height == depth.info.size.height) {
+            SnapshotIssSceneDepth(camera_motion.Depth());
+        }
+    }
 #endif
     scene_color = color;
 }
@@ -443,6 +458,9 @@ bool TemporalUpscaler::OnFrameStart() {
     ui_phase = false;
     ui_read_barrier = false;
     done_this_frame = false;
+#ifdef ISS_ANDROID_BIONIC
+    iss_scene_depth_snapshot_valid = false;
+#endif
     ldr_target = {};
     scene_color = {};
     snapshot_taken = false;
@@ -1670,6 +1688,93 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         return;
     }
 }
+
+#ifdef ISS_ANDROID_BIONIC
+void TemporalUpscaler::SnapshotIssSceneDepth(VideoCore::ImageId depth_id) {
+    if (iss_scene_depth_snapshot_valid || !depth_id || !scaled_session) return;
+    auto& depth = texture_cache.GetImage(depth_id);
+    const auto format = depth.info.pixel_format;
+    const u32 w = depth.info.size.width, h = depth.info.size.height;
+    if (!RenderTarget(w, h) ||
+        (format != vk::Format::eD32Sfloat &&
+         format != vk::Format::eD32SfloatS8Uint)) {
+        return;
+    }
+    const auto device = instance.GetDevice();
+    const auto allocator = instance.GetAllocator();
+    if (!iss_scene_depth_image || iss_scene_depth_format != format ||
+        iss_scene_depth_width != w || iss_scene_depth_height != h) {
+        // Allocation only when the size/format changes. Never force a GPU
+        // finish or allocate a new image every frame.
+        scheduler.Finish();
+        iss_scene_depth_view.reset();
+        iss_scene_depth_image = VideoCore::UniqueImage(device, allocator);
+        iss_scene_depth_image.Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = format,
+            .extent = {w, h, 1},
+            .mipLevels = 1, .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eTransferDst |
+                     vk::ImageUsageFlagBits::eTransferSrc |
+                     vk::ImageUsageFlagBits::eSampled,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        iss_scene_depth_view = Check(device.createImageViewUnique({
+            .image = vk::Image(iss_scene_depth_image),
+            .viewType = vk::ImageViewType::e2D,
+            .format = format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1},
+        }));
+        iss_scene_depth_format = format;
+        iss_scene_depth_width = w;
+        iss_scene_depth_height = h;
+    }
+
+    scheduler.EndRendering();
+    runtime.Transit(&depth, vk::ImageLayout::eTransferSrcOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    vk::AccessFlagBits2::eTransferRead);
+    runtime.FlushBarriers();
+    const auto cmd = scheduler.CommandBuffer();
+    const vk::ImageMemoryBarrier2 prepare{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryRead |
+                         vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eTransferDstOptimal,
+        .image = vk::Image(iss_scene_depth_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1},
+    };
+    cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &prepare});
+    const vk::ImageCopy region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+        .dstSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+        .extent = {w, h, 1},
+    };
+    cmd.copyImage(depth.GetImage(), vk::ImageLayout::eTransferSrcOptimal,
+                  vk::Image(iss_scene_depth_image), vk::ImageLayout::eTransferDstOptimal,
+                  region);
+    auto ready = prepare;
+    ready.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+    ready.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+    ready.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+    ready.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+    ready.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    ready.newLayout = vk::ImageLayout::eGeneral;
+    cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ready});
+    iss_scene_depth_snapshot_valid = true;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        std::printf("FSR3 ISS: copying G-buffer scene depth %ux%u before HUD reuse; "
+                    "FSR receives preserved depth, not the later UI depth\n", w, h);
+    }
+}
+#endif
 
 void TemporalUpscaler::EnsureUiResources(u32 w, u32 h, vk::Format color, vk::Format depth) {
     const bool resized = w != ui_width || h != ui_height;
