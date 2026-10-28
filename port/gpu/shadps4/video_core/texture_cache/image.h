@@ -62,7 +62,7 @@ struct UniqueImage {
         return *this;
     }
 
-    void Create(const vk::ImageCreateInfo& image_ci, bool allow_over_budget);
+    void Create(const vk::ImageCreateInfo& image_ci, bool allow_over_budget = true);
 
     void Destroy();
 
