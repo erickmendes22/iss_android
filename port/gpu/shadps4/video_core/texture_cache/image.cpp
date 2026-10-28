@@ -126,7 +126,13 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci, bool allow_over_bu
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && allow_over_budget) {
+    // Enforce Mali's shared-RAM budget even for callers that use the legacy
+    // one-argument UniqueImage::Create API (FSR intermediates, etc.).
+    const VkPhysicalDeviceProperties* device_props = nullptr;
+    vmaGetPhysicalDeviceProperties(allocator, &device_props);
+    const bool safe_over_budget = allow_over_budget && device_props &&
+                                  device_props->vendorID != 0x13B5;
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && safe_over_budget) {
         // tlg: see UniqueBuffer::Create: past the budget, the driver moves memory out instead of
         // failing (shadPS4-Infamous-FixBuild e656365e).
         LOG_WARNING(Render_Vulkan, "Allocating an image went over the memory budget, allocating "
