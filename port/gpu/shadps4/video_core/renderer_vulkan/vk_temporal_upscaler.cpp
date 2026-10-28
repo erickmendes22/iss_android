@@ -2015,10 +2015,34 @@ void TemporalUpscaler::RunScaled() {
         source_width = w;
         source_height = h;
     } else {
+#ifdef ISS_ANDROID_BIONIC
+        // The captured ZIP exposed the late guest depth image containing HUD
+        // lettering and only four distinct depths (96.3% zero) while the
+        // associated color held an entire 3D scene. Use the G-buffer snapshot
+        // captured before its physical depth attachment was reused for UI.
+        const bool saved_scene_depth = iss_scene_depth_snapshot_valid &&
+            iss_scene_depth_format == depth_format &&
+            iss_scene_depth_width == iw && iss_scene_depth_height == ih;
+        if (saved_scene_depth) {
+            depth_image = vk::Image(iss_scene_depth_image);
+            depth_view = *iss_scene_depth_view;
+        } else {
+            depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
+            runtime.Transit(&depth, vk::ImageLayout::eGeneral,
+                            vk::PipelineStageFlagBits2::eComputeShader,
+                            vk::AccessFlagBits2::eShaderRead);
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::printf("FSR3 ISS WARNING: no G-buffer depth snapshot for this frame\n");
+            }
+        }
+#else
         depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
-        color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&depth, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
+#endif
+        color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
         runtime.FlushBarriers();
