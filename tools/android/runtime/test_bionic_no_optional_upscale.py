@@ -140,11 +140,16 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("ISS preserves genuine object movement", gpu_test)
         self.assertIn("const float threshold = max(2e-7, depth * 0.005);", shader)
         self.assertIn("const vec2 disagreement = abs(candidate - result);", shader)
-        self.assertIn("const vec2 max_difference = size * 0.25;", shader)
+        # Capture (16): intermittent 20-126-pixel spikes on static rails
+        # pass the old 25%-of-screen gate and destabilize temporal history.
+        # Both camera-native and camera-history-fallback modes must reject them.
+        self.assertEqual(shader.count("const vec2 max_difference = max(vec2(4.0), size * 0.0125);"), 2)
+        self.assertNotIn("const vec2 max_difference = size * 0.25;", shader)
+        self.assertIn("all(lessThan(abs(object_motion.rg), max_difference))", shader)
         self.assertIn("ISS rejects 609px stale object history", gpu_test)
         self.assertIn("ISS rejects wrong-layer object depth", gpu_test)
         self.assertIn("ISS keeps depth-matched object motion", gpu_test)
-        # Preserve mode 1 non-ISS and mode 2's no-camera fallback behavior.
+        # Preserve mode 1 non-ISS while limiting mode 2's no-camera outliers.
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
 
