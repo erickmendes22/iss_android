@@ -1,0 +1,107 @@
+diff --git a/include/ffx_vk_portable.h b/include/ffx_vk_portable.h
+--- a/include/ffx_vk_portable.h
++++ b/include/ffx_vk_portable.h
+@@ -28,10 +28,32 @@
+ } FfxVkPortableResult;
+ 
+ typedef struct FfxVkPortableUpscaleContext FfxVkPortableUpscaleContext;
++
+ typedef struct FfxVkPortableFrameGenerationContext FfxVkPortableFrameGenerationContext;
+ 
+ /* SDK-reported memory owned by the FSR effect. Application-provided color,
+  * depth, motion, and output images are deliberately excluded. */
++/* Read-only, on-demand introspection of the pinned FSR3 context. The caller
++ * must restore each returned layout after a diagnostic copy. Never cache the
++ * handles across dispatches or call while another thread records this context. */
++typedef struct FfxVkPortableUpscaleDebugImage {
++    VkImage image;
++    VkFormat format;
++    VkImageLayout layout;
++    uint32_t width, height;
++} FfxVkPortableUpscaleDebugImage;
++typedef struct FfxVkPortableUpscaleDebugInfo {
++    uint32_t structSize, validImages;
++    float frameIndex, jitterPhaseCount;
++    float jitter[2], previousJitter[2], motionVectorScale[2];
++    float preExposure, deltaPreExposure;
++    /* previous color, current color before RCAS, accumulation, reactive masks */
++    FfxVkPortableUpscaleDebugImage images[4];
++} FfxVkPortableUpscaleDebugInfo;
++FfxVkPortableResult ffxVkPortableUpscaleContextGetDebugInfo(
++    FfxVkPortableUpscaleContext* context, FfxVkPortableUpscaleDebugInfo* info);
++
++
+ typedef struct FfxVkPortableMemoryUsage {
+     uint32_t structSize;
+     uint64_t totalUsageInBytes;
+diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
+--- a/src/ffx_vk_fsr3_portable.cpp
++++ b/src/ffx_vk_fsr3_portable.cpp
+@@ -17,6 +17,8 @@
+                                           PFN_vkGetInstanceProcAddr getProcAddr);
+ #include <FidelityFX/host/ffx_frameinterpolation.h>
+ #include <FidelityFX/host/ffx_fsr3upscaler.h>
++#include "../upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler_private.h"
++extern VkImageLayout getVKImageLayoutFromResourceState(FfxResourceStates state);
+ #include <FidelityFX/host/ffx_opticalflow.h>
+ 
+ #include <cstdio>
+@@ -203,6 +205,9 @@
+ static VkFormat toVkFormat(FfxSurfaceFormat format)
+ {
+     switch (format) {
++    case FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
++    case FFX_SURFACE_FORMAT_R8G8B8A8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
++    case FFX_SURFACE_FORMAT_R8_UNORM: return VK_FORMAT_R8_UNORM;
+     case FFX_SURFACE_FORMAT_R32_FLOAT:
+         return VK_FORMAT_R32_SFLOAT;
+     case FFX_SURFACE_FORMAT_R16G16_FLOAT:
+@@ -560,6 +565,48 @@
+         return fromFfxResult(result);
+     usage->totalUsageInBytes = ffxUsage.totalUsageInBytes;
+     usage->aliasableUsageInBytes = ffxUsage.aliasableUsageInBytes;
++    return FFX_VK_PORTABLE_OK;
++}
++
++extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextGetDebugInfo(
++    FfxVkPortableUpscaleContext* context, FfxVkPortableUpscaleDebugInfo* info)
++{
++    if (!context || !info) return FFX_VK_PORTABLE_ERROR_INVALID_POINTER;
++    if (info->structSize < sizeof(*info)) return FFX_VK_PORTABLE_ERROR_INVALID_STRUCT_SIZE;
++    if (context->magic != kContextMagic || !context->ffxContextCreated ||
++        !context->sharedResourcesInitialized) return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
++    std::lock_guard<std::mutex> lock(context->mutex);
++    auto* state = reinterpret_cast<FfxFsr3UpscalerContext_Private*>(&context->ffxContext);
++    FfxVkPortableUpscaleDebugInfo result{};
++    result.structSize = sizeof(result);
++    result.frameIndex = state->constants.frameIndex;
++    result.jitterPhaseCount = state->constants.jitterPhaseCount;
++    result.preExposure = state->preExposure;
++    result.deltaPreExposure = state->constants.deltaPreExposure;
++    for (unsigned i=0; i<2; ++i) {
++        result.jitter[i] = state->constants.jitterOffset[i];
++        result.previousJitter[i] = state->constants.previousFrameJitterOffset[i];
++        result.motionVectorScale[i] = state->constants.motionVectorScale[i];
++    }
++    const FfxResourceInternal resources[] = {
++        state->srvResources[FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_INTERNAL_UPSCALED_COLOR],
++        state->uavResources[FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_INTERNAL_UPSCALED_COLOR],
++        state->uavResources[FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_ACCUMULATION],
++        state->uavResources[FFX_FSR3UPSCALER_RESOURCE_IDENTIFIER_DILATED_REACTIVE_MASKS]};
++    auto& backend = state->contextDescription.backendInterface;
++    for (unsigned i=0; i<4; ++i) {
++        if (resources[i].internalIndex <= 0) continue;
++        const auto resource = backend.fpGetResource(&backend, resources[i]);
++        if (!resource.resource || resource.description.type != FFX_RESOURCE_TYPE_TEXTURE2D ||
++            (resource.description.flags & FFX_RESOURCE_FLAGS_UNDEFINED)) continue;
++        const auto format = toVkFormat(resource.description.format);
++        if (format == VK_FORMAT_UNDEFINED) continue;
++        result.images[i] = {reinterpret_cast<VkImage>(resource.resource), format,
++            getVKImageLayoutFromResourceState(resource.state),
++            resource.description.width, resource.description.height};
++        result.validImages |= 1u << i;
++    }
++    *info = result;
+     return FFX_VK_PORTABLE_OK;
+ }
+ 

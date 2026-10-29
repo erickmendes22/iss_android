@@ -40,7 +40,27 @@ public class CaptureExportTest {
    assert !e.getName().contains("save");assert FsrCaptureFiles.captureName(e.getName());z.closeEntry();}}
   assert total==14&&pre==2&&post==2&&metadata==2;
   assert !FsrCaptureFiles.captureName("savedata/foo.bin");
-  System.out.println("PASS: both pre/post-FXAA frames + metadata reach ZIP; partial, oversized and unrelated files excluded");
+  for(int f=0;f<2;f++){
+   String p=String.format("f%03d_",f);
+   Files.write(new File(dir,p+"fsr_info.txt").toPath(),"sdk_images=15\n".getBytes("UTF-8"));
+   file(dir,p+"fsr_history_previous_4x4_rgba16f.raw",128);
+   file(dir,p+"fsr_before_rcas_4x4_rgba16f.raw",128);
+   file(dir,p+"fsr_reactivity_2x2_rgba.raw",16);
+  }
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f000_fsr_accumulation_2x2_r8.raw",4);
+  file(dir,"f001_fsr_accumulation_2x2_r8.raw",3);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f001_fsr_accumulation_2x2_r8.raw",4);
+  file(dir,"f001_fsr_accumulation_2x2_rgba.raw",16); // wrong stage encoding
+  File[] sdk=FsrCaptureFiles.select(dir);
+  assert sdk.length==24&&FsrCaptureFiles.complete(sdk);
+  ByteArrayOutputStream sdkBytes=new ByteArrayOutputStream();
+  try(ZipOutputStream z=new ZipOutputStream(sdkBytes)){for(File f:sdk){z.putNextEntry(new ZipEntry(f.getName()));Files.copy(f.toPath(),z);z.closeEntry();}}
+  int sdkCount=0;
+  try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(sdkBytes.toByteArray()))){for(ZipEntry e;(e=z.getNextEntry())!=null;){if(e.getName().contains("_fsr_"))sdkCount++;z.closeEntry();}}
+  assert sdkCount==10;
+  System.out.println("PASS: AA and all SDK stages survive ZIP; partial and wrongly encoded SDK stages rejected");
  }
 }
 '''

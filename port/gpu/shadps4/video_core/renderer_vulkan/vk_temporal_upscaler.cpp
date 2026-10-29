@@ -175,6 +175,75 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
     std::printf("Dump: frame %d -> %s\n", frame, dir.c_str());
 }
 
+#ifdef ISS_ANDROID_BIONIC
+// Copy the exact SDK history and validation stages only for a requested capture.
+// Restore each layout immediately: FidelityFX retains its own resource-state tracker.
+void DumpFsrHistory(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                    FfxVkPortableUpscaleContext* context, int frame,
+                    const FfxVkPortableUpscaleDispatchInfo& dispatch) {
+    FfxVkPortableUpscaleDebugInfo info{};
+    info.structSize = sizeof(info);
+    const auto result = ffxVkPortableUpscaleContextGetDebugInfo(context, &info);
+    const char* names[] = {"fsr_history_previous", "fsr_before_rcas",
+                           "fsr_accumulation", "fsr_reactivity"};
+    u32 copied = 0;
+    if (result == FFX_VK_PORTABLE_OK) for (u32 i=0; i<4; ++i) {
+        if (!(info.validImages & (1u << i))) continue;
+        const auto& image = info.images[i];
+        const bool color = i < 2;
+        const auto format = color ? VK_FORMAT_R16G16B16A16_SFLOAT :
+                                     i == 2 ? VK_FORMAT_R8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+        const auto extent = color ? dispatch.outputSize : dispatch.renderSize;
+        if (!image.image || image.format != format || image.width != extent.width ||
+            image.height != extent.height) continue;
+        const auto original = vk::ImageLayout(image.layout);
+        // Only layouts proven for these SDK stages are eligible; never guess.
+        if (original != vk::ImageLayout::eGeneral &&
+            original != vk::ImageLayout::eShaderReadOnlyOptimal) continue;
+        const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to,
+                                     vk::PipelineStageFlags2 src, vk::AccessFlags2 src_access,
+                                     vk::PipelineStageFlags2 dst, vk::AccessFlags2 dst_access) {
+            const vk::ImageMemoryBarrier2 barrier{
+                .srcStageMask=src, .srcAccessMask=src_access,
+                .dstStageMask=dst, .dstAccessMask=dst_access,
+                .oldLayout=from, .newLayout=to,
+                .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED, .image=vk::Image(image.image),
+                .subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}};
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&barrier});
+        };
+        transition(original, vk::ImageLayout::eGeneral,
+            vk::PipelineStageFlagBits2::eAllCommands,
+            vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+        DumpImages(instance,scheduler,cmdbuf,frame,
+            {{vk::Image(image.image),image.width,image.height,color?8u:i==2?1u:4u,
+              names[i],color?"rgba16f":i==2?"r8":"rgba"}});
+        transition(vk::ImageLayout::eGeneral, original,
+            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+            vk::PipelineStageFlagBits2::eAllCommands,
+            vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite);
+        copied |= 1u << i;
+    }
+    const char* env=std::getenv("TLG_DUMP_DIR");
+    const std::string dir=env&&env[0]?env:"out/dump";
+    char path[512]; std::snprintf(path,sizeof(path),"%s/f%03d_fsr_info.txt",dir.c_str(),frame);
+    if (FILE* f=std::fopen(path,"w")) {
+        std::fprintf(f,"sdk_debug_result=%d\nsdk_images=%u\ndispatch_frame_id=%llu\n"
+          "dispatch_reset=%u\nsdk_history_frame_index=%.0f\nsdk_jitter_phase_count=%.0f\n"
+          "sdk_jitter=%.9g,%.9g\nsdk_previous_jitter=%.9g,%.9g\n"
+          "sdk_motion_vector_uv_scale=%.9g,%.9g\nframe_time_ms=%.9g\n"
+          "pre_exposure=%.9g\ndelta_pre_exposure=%.9g\n",
+          int(result),copied,static_cast<unsigned long long>(dispatch.frameId),
+          unsigned(dispatch.reset),info.frameIndex,info.jitterPhaseCount,
+          info.jitter[0],info.jitter[1],info.previousJitter[0],info.previousJitter[1],
+          info.motionVectorScale[0],info.motionVectorScale[1],dispatch.frameTimeMilliseconds,
+          info.preExposure,info.deltaPreExposure);
+        std::fclose(f);
+    }
+}
+#endif
+
 void PrintIssues(const char* what, u64 issues) {
     std::printf("Upscaler: %s invalid:", what);
     for (u32 bit = 0; bit < 64; ++bit) {
@@ -2439,6 +2508,7 @@ void TemporalUpscaler::RunScaled() {
         // the images consumed by the SDK, so loss of detail can be located
         // before vs. during temporal reconstruction. No GPU readback otherwise.
         if (const int dump = DumpFrame(); dump >= 0) {
+            DumpFsrHistory(instance,scheduler,cmdbuf,context,dump,info);
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{color_image, source_width, source_height, 4, "input", "rgba"},
                         {vk::Image(motion_image), w, h, 4, "motion", "rg16f"},

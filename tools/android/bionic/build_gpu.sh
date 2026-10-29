@@ -23,7 +23,7 @@ fsr_patch_dir="$PWD/port/gpu/patches/fsr-vulkan"
   echo "Missing pinned FSR-Vulkan SDK in Android checkout" >&2
   exit 1
 }
-for patch_name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch 0008-ffx-vk-compatible-memory-fallback.patch; do
+for patch_name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch 0008-ffx-vk-compatible-memory-fallback.patch 0009-fsr3-on-demand-history-introspection.patch; do
   patch="$fsr_patch_dir/$patch_name"
   [[ -f "$patch" ]] || { echo "Required FidelityFX patch absent: $patch_name" >&2; exit 1; }
   if ! git -C "$fsr_module" apply --reverse --check "$patch" 2>/dev/null; then

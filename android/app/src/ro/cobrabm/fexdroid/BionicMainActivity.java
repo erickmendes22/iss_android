@@ -149,6 +149,9 @@ public final class BionicMainActivity extends Activity {
                 "aa_before_fxaa: original AA-pass input; format suffix preserves original GPU pixel encoding.\n"+
                 "aa_after_fxaa: game AA/composite output, before FSR.\n"+
                 "aa_info: selected FSR input, original Vulkan format and extent; missing pre-FXAA is explicitly reported.\n"+
+                "fsr_history_previous / fsr_before_rcas: exact SDK previous/current color history, RGBA16F.\n"+
+                "fsr_accumulation: R8 history weight. fsr_reactivity: RGBA8 (reactive, disocclusion, shading change, accumulation).\n"+
+                "fsr_info: effective SDK frame index, reset, jitter and scales.\n"+
                 "motion: RG16 float pixels (previous-current).\n"+
                 "depth: float32 depth, reversed-Z.\n"+
                 "f000/f001 = successive frames; output includes SDK sharpening.\n").getBytes("UTF-8"));

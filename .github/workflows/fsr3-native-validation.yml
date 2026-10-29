@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           mod=port/gpu/third_party/fsr-vulkan
-          for name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch 0008-ffx-vk-compatible-memory-fallback.patch; do
+          for name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch 0008-ffx-vk-compatible-memory-fallback.patch 0009-fsr3-on-demand-history-introspection.patch; do
             git -C "$mod" apply --check "$PWD/port/gpu/patches/fsr-vulkan/$name"
             git -C "$mod" apply "$PWD/port/gpu/patches/fsr-vulkan/$name"
           done
