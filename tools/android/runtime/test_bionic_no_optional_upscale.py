@@ -86,6 +86,42 @@ class BionicFsr3Tests(unittest.TestCase):
         # Different Android application IDs and ephemeral signatures are forbidden.
         manifest = (ROOT / "android/app/BionicAndroidManifest.xml").read_text()
         self.assertIn('package="com.daedalus.iss.bionic"', manifest)
+    def test_iss_native_camera_reprojection_order(self):
+        import math
+        camera_cpp = (GPU / "shadps4/video_core/renderer_vulkan/vk_camera_motion.cpp").read_text()
+        self.assertIn("sample.inverse[col * 4 + k]", camera_cpp)
+        self.assertIn("native_previous_composite[k * 4 + row]", camera_cpp)
+        self.assertNotIn("sample.inverse[k * 4 + row]", camera_cpp)
+        # Noncommuting homogeneous matrices expose the old transpose(B*A)
+        # error that an identity/static-camera fixture cannot detect.
+        inv_current = [
+            [1.0, 0.2, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.1, 0.0, 0.0, 1.0],
+        ]
+        previous = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.15, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.1, 0.0, 1.0],
+        ]
+        transpose_expected = [
+            [sum(inv_current[col][k] * previous[k][row]
+                 for k in range(4)) for col in range(4)]
+            for row in range(4)
+        ]
+        transpose_wrong = [
+            [sum(inv_current[k][row] * previous[col][k]
+                 for k in range(4)) for col in range(4)]
+            for row in range(4)
+        ]
+        self.assertAlmostEqual(transpose_expected[0][0], 1.03, places=6)
+        self.assertAlmostEqual(transpose_wrong[0][0], 1.0, places=6)
+        self.assertGreater(
+            max(abs(transpose_expected[r][c] - transpose_wrong[r][c])
+                for r in range(4) for c in range(4)), 0.02)
+
     def test_iss_fsr3_object_vectors_remove_guest_camera_jitter(self):
         shader = (GPU / "shadps4/video_core/host_shaders/camera_motion.comp").read_text()
         gpu_test = (ROOT / "port/tests/test_camera_motion.cpp").read_text()

@@ -276,8 +276,12 @@ void CameraMotion::PrepareIssNativeCamera() {
             for (int col = 0; col < 4; ++col) {
                 double value = 0.0;
                 for (int k = 0; k < 4; ++k) {
-                    value += double(sample.inverse[k * 4 + row]) *
-                             double(native_previous_composite[col * 4 + k]);
+                    // Upload transpose(inv(current) * composite(previous)).
+                    // C[row,col] = sum_k inv(current)[col,k] * prev[k,row].
+                    // The old indices computed transpose(prev * inv(current)),
+                    // leaving camera reprojected vectors near zero during motion.
+                    value += double(sample.inverse[col * 4 + k]) *
+                             double(native_previous_composite[k * 4 + row]);
                 }
                 if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
                     native_motion_valid = false;

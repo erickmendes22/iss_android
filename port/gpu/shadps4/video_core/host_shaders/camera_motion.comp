@@ -41,9 +41,10 @@ void main() {
     // Bloodborne 864-byte global camera structure has not been found in this game.
     // Do not reconstruct any world position or project with an invalid camera.
     // Uncovered/occluded pixels get zero motion instead of NaNs or invented camera motion.
-    // ISS camera mode: the verified game 4x4 matrices were multiplied on the
-    // host as previous_composite * inverse(current_composite), ROW-MAJOR.
-    // They map CURRENT NDC clip coordinates into PREVIOUS clip coordinates.
+    // ISS native camera uses ROW-vector homogeneous matrices.
+    // Host uploads transpose(inverse(current_composite) * previous_composite).
+    // This maps CURRENT clip-space coordinates into PREVIOUS clip-space;
+    // reversing the factors collapses the motion of a moving camera.
     // The fourth row occupies the old 'proj' push-constant slot. Never use
     // Bloodborne's affine/3000-far-plane assumptions for this mode.
     if (mode == 3u || mode == 4u) {
