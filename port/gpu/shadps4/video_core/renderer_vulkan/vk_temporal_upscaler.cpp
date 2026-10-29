@@ -72,6 +72,36 @@ int DumpFrame() {
     return index++;
 }
 
+#ifdef ISS_ANDROID_BIONIC
+// Preserve the original AA input encoding: never reinterpret an HDR input as RGBA8.
+struct AaDumpEncoding {u32 bytes; const char* name;};
+AaDumpEncoding AaEncoding(vk::Format format) {
+    switch(format) {
+    case vk::Format::eR8G8B8A8Unorm: case vk::Format::eR8G8B8A8Srgb: return {4,"rgba"};
+    case vk::Format::eB8G8R8A8Unorm: case vk::Format::eB8G8R8A8Srgb: return {4,"bgra"};
+    case vk::Format::eR16G16B16A16Sfloat: return {8,"rgba16f"};
+    case vk::Format::eR32G32B32A32Sfloat: return {16,"rgba32f"};
+    case vk::Format::eB10G11R11UfloatPack32: return {4,"b10g11r11uf"};
+    case vk::Format::eA2B10G10R10UnormPack32: return {4,"a2b10g10r10"};
+    default: return {0,"unsupported"};
+    }
+}
+void DumpAaInfo(int frame, bool available, u64 address, u32 format, u32 width, u32 height,
+                u32 crop_width, u32 crop_height, float jitter_x, float jitter_y) {
+    const char* dir=std::getenv("TLG_DUMP_DIR");
+    char path[512];std::snprintf(path,sizeof(path),"%s/f%03d_aa_info.txt",dir&&*dir?dir:"out/dump",frame);
+    if(FILE* f=std::fopen(path,"wb")) {
+        std::fprintf(f,"pre_fxaa_available=%u\npre_fxaa_gpu_address=0x%llx\npre_fxaa_vulkan_format=%u\n"
+                       "pre_fxaa_extent=%ux%u\ncaptured_extent=%ux%u\nfsr_input=post_fxaa_composite\n"
+                       "jitter_render_pixels=%.9g,%.9g\n",
+                     unsigned(available),(unsigned long long)address,format,width,height,
+                     crop_width,crop_height,jitter_x,jitter_y);
+        std::fclose(f);
+    }
+}
+
+#endif
+
 struct DumpImage {
     vk::Image image; ///< in layout General
     u32 width, height, bytes_per_pixel;
@@ -464,6 +494,7 @@ bool TemporalUpscaler::OnFrameStart() {
     ldr_target = {};
 #ifdef ISS_ANDROID_BIONIC
     iss_aa_prefilter = {};
+    iss_aa_capture = {};
 #endif
     scene_color = {};
     snapshot_taken = false;
@@ -2013,15 +2044,19 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
     // filtered before the scene enters FSR3. Do not substitute the input
     // for the composite: the game's colour processing must remain intact.
     iss_aa_prefilter = {};
+    iss_aa_capture = {};
+    iss_aa_capture.address = aa_input_addr;
     if (aa_input_addr && aa_input_addr != gpu_addr) {
         const auto pre = texture_cache.FindImageFromRange(aa_input_addr, 4, false);
         if (pre) {
             const auto& src = texture_cache.GetImage(pre);
+            iss_aa_capture.format = u32(src.info.pixel_format);
+            iss_aa_capture.width = src.info.size.width;
+            iss_aa_capture.height = src.info.size.height;
             if (src.info.guest_address == aa_input_addr &&
-                src.info.size.width == width && src.info.size.height == height &&
-                (src.info.pixel_format == vk::Format::eR8G8B8A8Unorm ||
-                 src.info.pixel_format == vk::Format::eR16G16B16A16Sfloat) &&
-                (src.usage_flags & vk::ImageUsageFlagBits::eSampled)) {
+                src.info.size.width >= width && src.info.size.height >= height &&
+                AaEncoding(src.info.pixel_format).bytes != 0 &&
+                (src.usage_flags & vk::ImageUsageFlagBits::eTransferSrc)) {
                 iss_aa_prefilter = pre;
             }
             static bool reported_pre = false;
@@ -2373,12 +2408,20 @@ void TemporalUpscaler::RunScaled() {
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{depth_image, source_width, source_height, 4, "depth", "f32",
                          vk::ImageAspectFlagBits::eDepth}});
+            DumpAaInfo(dump, bool(iss_aa_prefilter), iss_aa_capture.address,
+                       iss_aa_capture.format, iss_aa_capture.width, iss_aa_capture.height,
+                       w, h, info.jitterOffset.x, info.jitterOffset.y);
             if (iss_aa_prefilter) {
-                const auto& pre = texture_cache.GetImage(iss_aa_prefilter);
-                const bool fp16 = pre.info.pixel_format == vk::Format::eR16G16B16A16Sfloat;
+                auto& pre = texture_cache.GetImage(iss_aa_prefilter);
+                const auto encoding = AaEncoding(pre.info.pixel_format);
+                // DumpImages requires General. Track the transition so future guest
+                // draws see the correct layout; do this only for the requested pair.
+                runtime.Transit(&pre, vk::ImageLayout::eGeneral,
+                                vk::PipelineStageFlagBits2::eTransfer,
+                                vk::AccessFlagBits2::eTransferRead);
+                runtime.FlushBarriers();
                 DumpImages(instance, scheduler, cmdbuf, dump,
-                           {{pre.GetImage(), w, h, fp16 ? 8u : 4u,
-                             "aa_before_fxaa", fp16 ? "rgba16f" : "rgba"}});
+                           {{pre.GetImage(), w, h, encoding.bytes, "aa_before_fxaa", encoding.name}});
             }
         }
 #endif

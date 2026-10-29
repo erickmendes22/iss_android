@@ -227,6 +227,7 @@ private:
     VideoCore::ImageId ldr_target{};
 #ifdef ISS_ANDROID_BIONIC
     VideoCore::ImageId iss_aa_prefilter{}; // passive pre-FXAA capture, never FSR input
+    struct {u64 address{}; u32 format{}, width{}, height{};} iss_aa_capture;
 #endif
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
