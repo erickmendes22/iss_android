@@ -2019,7 +2019,8 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
             const auto& src = texture_cache.GetImage(pre);
             if (src.info.guest_address == aa_input_addr &&
                 src.info.size.width == width && src.info.size.height == height &&
-                src.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+                (src.info.pixel_format == vk::Format::eR8G8B8A8Unorm ||
+                 src.info.pixel_format == vk::Format::eR16G16B16A16Sfloat) &&
                 (src.usage_flags & vk::ImageUsageFlagBits::eSampled)) {
                 iss_aa_prefilter = pre;
             }
@@ -2374,8 +2375,10 @@ void TemporalUpscaler::RunScaled() {
                          vk::ImageAspectFlagBits::eDepth}});
             if (iss_aa_prefilter) {
                 const auto& pre = texture_cache.GetImage(iss_aa_prefilter);
+                const bool fp16 = pre.info.pixel_format == vk::Format::eR16G16B16A16Sfloat;
                 DumpImages(instance, scheduler, cmdbuf, dump,
-                           {{pre.GetImage(), w, h, 4, "aa_before_fxaa", "rgba"}});
+                           {{pre.GetImage(), w, h, fp16 ? 8u : 4u,
+                             "aa_before_fxaa", fp16 ? "rgba16f" : "rgba"}});
             }
         }
 #endif

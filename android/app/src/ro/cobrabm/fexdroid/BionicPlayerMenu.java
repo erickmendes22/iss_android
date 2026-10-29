@@ -78,7 +78,7 @@ final class BionicPlayerMenu {
   // Clear only prior captures, never user saves or unrelated diagnostic files.
   File[] old=directory.listFiles();
   if(old!=null)for(File file:old){
-   if(file.isFile()&&file.getName().matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rg16f|f32)\\.raw"))
+   if(file.isFile()&&file.getName().matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rgba16f|rg16f|f32)\\.raw"))
     file.delete();
   }
   File trigger=new File(base,"fsr-capture.trigger");

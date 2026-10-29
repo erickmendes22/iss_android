@@ -119,7 +119,7 @@ public final class BionicMainActivity extends Activity {
  private void setBusy(boolean value){busy=value;if(progress!=null)progress.setVisibility(value?android.view.View.VISIBLE:android.view.View.GONE);for(Button b:actions)b.setEnabled(!value);}
  private void chooseFsrExport(){
   File capture=new File(getFilesDir(),"issport/fsr-capture");
-  File[] files=capture.listFiles((dir,name)->name.matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rg16f|f32)\\.raw"));
+  File[] files=capture.listFiles((dir,name)->name.matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rgba16f|rg16f|f32)\\.raw"));
   if(files==null||files.length<4){
    status.setText(AppLanguage.text("No complete FSR3 capture yet. Use Capture FSR3 in the in-game menu and play a few seconds.",
                                    "Ainda não há captura FSR3 completa. Use Capturar FSR3 no menu do jogo e jogue alguns segundos."));
@@ -139,7 +139,7 @@ public final class BionicMainActivity extends Activity {
    try(OutputStream output=getContentResolver().openOutputStream(uri,"wt")){
     if(output==null)throw new IOException("No writable destination.");
     File dir=new File(getFilesDir(),"issport/fsr-capture");
-    File[] files=dir.listFiles((parent,name)->name.matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rg16f|f32)\\.raw"));
+    File[] files=dir.listFiles((parent,name)->name.matches("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_[0-9]+x[0-9]+_(rgba|rgba16f|rg16f|f32)\\.raw"));
     if(files==null||files.length<4)throw new IOException("FSR capture not yet complete.");
     java.util.Arrays.sort(files,(a,b)->a.getName().compareTo(b.getName()));
     try(java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(output)){
@@ -149,7 +149,7 @@ public final class BionicMainActivity extends Activity {
                 "motion: RG16 float pixels (previous-current).\\n"+
                 "depth: float32 depth, reversed-Z.\\n"+
                 "f000/f001 = successive frames; output includes SDK sharpening.\\n"+
-                "aa_before_fxaa: optional original game AA input before FXAA (RGBA8), FSR3 still uses post-AA input.\\n").getBytes("UTF-8"));
+                "aa_before_fxaa: optional original game AA input before FXAA (RGBA8/RGBA16F), FSR3 still uses post-AA input.\\n").getBytes("UTF-8"));
      zip.closeEntry();
      byte[] buf=new byte[65536];
      int count=0;
