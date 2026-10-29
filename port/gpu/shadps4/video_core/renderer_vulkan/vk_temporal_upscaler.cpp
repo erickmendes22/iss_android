@@ -2448,6 +2448,8 @@ void TemporalUpscaler::RunScaled() {
     }
 
 #ifdef ISS_ANDROID_BIONIC
+    // Previous detail-reactivity experiment is opt-in only, because the actual
+    // defect is intermittent incorrect motion, not lack of RCAS sharpening.
     // ZIP (15): the SDK's previous color history survives byte-for-byte,
     // with accumulation at 255 across 99.8%+ of the frame. Motion, source
     // selection and jitter were checked against captures (13-15).
@@ -2460,7 +2462,7 @@ void TemporalUpscaler::RunScaled() {
         color.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
         !mask_ready && iss_detail_reactive_pipeline) {
         const char* setting = std::getenv("ISS_FSR3_DETAIL_REACTIVE");
-        if (!setting || setting[0] != '0') {
+        if (setting && setting[0] == '1') {
             const vk::Image mask_image = vk::Image(reactive_image);
             const vk::ImageMemoryBarrier2 to_write{
                 .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,

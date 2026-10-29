@@ -90,15 +90,16 @@ void main() {
             // layer. Compare relative to the actual (reversed) depth.
             const float threshold = max(2e-7, depth * 0.005);
             const vec2 candidate = object_motion.rg + previous_jitter;
-            // In the Oct 28 two-frame 640x360 capture, the static office
-            // doorway (x=168..215,y=102..206) received +609 px object
-            // motion while camera reprojection correctly yielded ~0.
-            // A reused/mismatched mesh-history slot must not contaminate
-            // FSR3's accumulation. Reject displacements exceeding 1/4
-            // of the scene size relative to camera, but retain normal
-            // object motion, including real independent animation.
+            // ZIP (16): static rails and ceiling geometry occasionally receive
+            // object vectors of 20..126 render pixels although the global camera
+            // is stationary. The former 1/4-screen guard (160x90 at 640x360)
+            // accepted those invalid vectors, causing local temporal jumps.
+            // A conservative per-axis 1.25%-screen guard (min 4 pixels) rejects
+            // the entire measured outlier population while preserving all
+            // ordinary vectors in both captured frames. Never clamp the bad
+            // vector: discard it and use the depth-reprojected camera result.
             const vec2 disagreement = abs(candidate - result);
-            const vec2 max_difference = size * 0.25;
+            const vec2 max_difference = max(vec2(4.0), size * 0.0125);
             if (object_motion.b > 0.99 &&
                 abs(object_motion.a - depth) < threshold &&
                 !any(isnan(candidate)) && !any(isinf(candidate)) &&
@@ -110,12 +111,17 @@ void main() {
         return;
     }
     if (mode == 2u) {
+        // Rare camera-history gaps used to bypass the native outlier guard.
+        // They are exactly when a single bad object vector can cause a visible
+        // 1-frame shimmer. Use reversed-Z depth tolerance and the same bound.
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
-        const float depth_threshold = max(2e-7, (1.0 - depth) * 0.01);
+        const float depth_threshold = max(2e-7, depth * 0.005);
+        const vec2 max_difference = max(vec2(4.0), size * 0.0125);
         vec2 result = vec2(0.0);
         if (object_motion.b > 0.99 &&
             abs(object_motion.a - depth) < depth_threshold &&
-            !any(isnan(object_motion.rg)) && !any(isinf(object_motion.rg))) {
+            !any(isnan(object_motion.rg)) && !any(isinf(object_motion.rg)) &&
+            all(lessThan(abs(object_motion.rg), max_difference))) {
             result = object_motion.rg;
         }
         imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
