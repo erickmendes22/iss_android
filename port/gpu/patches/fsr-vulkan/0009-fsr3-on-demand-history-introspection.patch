@@ -37,15 +37,15 @@ diff --git a/include/ffx_vk_portable.h b/include/ffx_vk_portable.h
 diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
 --- a/src/ffx_vk_fsr3_portable.cpp
 +++ b/src/ffx_vk_fsr3_portable.cpp
-@@ -17,6 +17,8 @@
-                                           PFN_vkGetInstanceProcAddr getProcAddr);
- #include <FidelityFX/host/ffx_frameinterpolation.h>
- #include <FidelityFX/host/ffx_fsr3upscaler.h>
+@@ -25,6 +25,8 @@
+ #include <limits>
+ #include <mutex>
+ #include <new>
 +#include "../upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler_private.h"
 +extern VkImageLayout getVKImageLayoutFromResourceState(FfxResourceStates state);
- #include <FidelityFX/host/ffx_opticalflow.h>
  
- #include <cstdio>
+ namespace {
+ 
 @@ -203,6 +205,9 @@
  static VkFormat toVkFormat(FfxSurfaceFormat format)
  {
