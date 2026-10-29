@@ -226,8 +226,9 @@ private:
     u64 ui_trigger_vs = 0x34e8a281;
     VideoCore::ImageId ldr_target{};
 #ifdef ISS_ANDROID_BIONIC
-    VideoCore::ImageId iss_aa_prefilter{}; // passive pre-FXAA capture, never FSR input
+    VideoCore::ImageId iss_aa_prefilter{}; // exact current-frame AA source; compatible LDR may feed FSR
     struct {u64 address{}; u32 format{}, width{}, height{};} iss_aa_capture;
+    bool iss_fsr_used_original_aa{};
 #endif
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass

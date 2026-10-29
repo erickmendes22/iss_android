@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 
 /** One filename/size contract shared by capture cleanup, readiness and ZIP export. */
 final class FsrCaptureFiles {
- private static final Pattern RAW=Pattern.compile("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa)_([0-9]+)x([0-9]+)_(rgba|bgra|rg16f|f32|rgba16f|rgba32f|b10g11r11uf|a2b10g10r10)\\.raw");
+ private static final Pattern RAW=Pattern.compile("f[0-9]{3}_(input|motion|depth|output|aa_before_fxaa|aa_after_fxaa)_([0-9]+)x([0-9]+)_(rgba|bgra|rg16f|f32|rgba16f|rgba32f|b10g11r11uf|a2b10g10r10)\\.raw");
  static boolean captureName(String name){return RAW.matcher(name).matches()||name.matches("f[0-9]{3}_aa_info\\.txt");}
  static boolean exportable(File file){
   if(!file.isFile())return false;

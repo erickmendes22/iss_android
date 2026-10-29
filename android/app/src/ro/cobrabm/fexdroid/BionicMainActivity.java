@@ -147,7 +147,8 @@ public final class BionicMainActivity extends Activity {
      zip.write(("FSR3 inFAMOUS input and output buffers.\n"+
                 "input/output: tightly packed RGBA8 UNORM, width x height in filename.\n"+
                 "aa_before_fxaa: original AA-pass input; format suffix preserves original GPU pixel encoding.\n"+
-                "aa_info: original Vulkan format and extent; missing pre-FXAA is explicitly reported.\n"+
+                "aa_after_fxaa: game AA/composite output, before FSR.\n"+
+                "aa_info: selected FSR input, original Vulkan format and extent; missing pre-FXAA is explicitly reported.\n"+
                 "motion: RG16 float pixels (previous-current).\n"+
                 "depth: float32 depth, reversed-Z.\n"+
                 "f000/f001 = successive frames; output includes SDK sharpening.\n").getBytes("UTF-8"));

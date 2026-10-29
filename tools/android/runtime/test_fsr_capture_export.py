@@ -20,22 +20,24 @@ public class CaptureExportTest {
   }
   assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // GPU copies not ready
   file(dir,"f000_aa_before_fxaa_2x2_rgba16f.raw",32);
+  file(dir,"f000_aa_after_fxaa_2x2_rgba.raw",16);
+  file(dir,"f001_aa_after_fxaa_2x2_rgba.raw",16);
   file(dir,"f001_aa_before_fxaa_2x2_rgba.raw",15); // partial: must not enter ZIP
   assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
   file(dir,"f001_aa_before_fxaa_2x2_rgba.raw",16);
   file(dir,"f000_input_999999999999999999999x2_rgba.raw",16);
   file(dir,"user-save.raw",16);file(dir,"f001_input_2x2_rgba.raw.tmp",16);
-  File[] selected=FsrCaptureFiles.select(dir);assert selected.length==12;
+  File[] selected=FsrCaptureFiles.select(dir);assert selected.length==14;
   assert FsrCaptureFiles.complete(selected);
   ByteArrayOutputStream bytes=new ByteArrayOutputStream();
   try(ZipOutputStream z=new ZipOutputStream(bytes)){for(File f:selected){z.putNextEntry(new ZipEntry(f.getName()));Files.copy(f.toPath(),z);z.closeEntry();}}
-  int pre=0,metadata=0,total=0;
+  int pre=0,post=0,metadata=0,total=0;
   try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(bytes.toByteArray()))){for(ZipEntry e;(e=z.getNextEntry())!=null;){
-   total++;if(e.getName().contains("aa_before_fxaa"))pre++;if(e.getName().contains("aa_info"))metadata++;
+   total++;if(e.getName().contains("aa_before_fxaa"))pre++;if(e.getName().contains("aa_after_fxaa"))post++;if(e.getName().contains("aa_info"))metadata++;
    assert !e.getName().contains("save");assert FsrCaptureFiles.captureName(e.getName());z.closeEntry();}}
-  assert total==12&&pre==2&&metadata==2;
+  assert total==14&&pre==2&&post==2&&metadata==2;
   assert !FsrCaptureFiles.captureName("savedata/foo.bin");
-  System.out.println("PASS: both pre-FXAA frames + metadata reach ZIP; partial, oversized and unrelated files excluded");
+  System.out.println("PASS: both pre/post-FXAA frames + metadata reach ZIP; partial, oversized and unrelated files excluded");
  }
 }
 '''

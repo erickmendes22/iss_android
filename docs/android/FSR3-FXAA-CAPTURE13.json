@@ -1,0 +1,33 @@
+{
+  "source": "User capture inFAMOUS-FSR3-Input-Motion-Output (13).zip",
+  "method": "Rec.709-weighted RGB code values; standard deviation after subtracting scipy.ndimage.gaussian_filter(sigma=0.7); includes aliasing energy, not a pure perceptual-detail score.",
+  "frames": [
+    {
+      "frame": 0,
+      "pre_sha256": "900e4fb31fcee4201e65e928bbac488b05fd048c87d29210cf3351063e211fb8",
+      "post_sha256": "81bf80cdd720b1042cc33acd5050e81b526cb94f50fda89e65cc266b5cd01880",
+      "width": 640,
+      "height": 360,
+      "vulkan_format": 37,
+      "rgb_components_unchanged_fraction": 0.9518200231481482,
+      "rgb_mean_absolute_difference": 0.3670486111111111,
+      "highpass_std_pre": 3.9359576514902828,
+      "highpass_std_post": 2.723127223236335,
+      "highpass_std_reduction_fraction": 0.3081411274317777
+    },
+    {
+      "frame": 1,
+      "pre_sha256": "ebc46fd1b885881867ec7e3ec11c2917c98e3513cd0775cad87920c27ff4a49b",
+      "post_sha256": "74d2e0698b783b31d037c92ea6c4449885c0a1774d14cf2551459f124aa6de27",
+      "width": 640,
+      "height": 360,
+      "vulkan_format": 37,
+      "rgb_components_unchanged_fraction": 0.9520138888888889,
+      "rgb_mean_absolute_difference": 0.3638179976851852,
+      "highpass_std_pre": 3.9285893593694494,
+      "highpass_std_post": 2.72011503146518,
+      "highpass_std_reduction_fraction": 0.3076102431072697
+    }
+  ],
+  "conclusion": "FXAA measurably filters the exact LDR scene before FSR. This does not establish that it is the sole cause of perceived blur; device validation of pre-FXAA FSR input remains pending."
+}

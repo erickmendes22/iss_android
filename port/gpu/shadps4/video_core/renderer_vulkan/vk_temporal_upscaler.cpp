@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "iss_fsr_input_policy.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/motion_history.h"
@@ -86,16 +87,16 @@ AaDumpEncoding AaEncoding(vk::Format format) {
     default: return {0,"unsupported"};
     }
 }
-void DumpAaInfo(int frame, bool available, u64 address, u32 format, u32 width, u32 height,
+void DumpAaInfo(int frame, bool available, bool original_input, u64 address, u32 format, u32 width, u32 height,
                 u32 crop_width, u32 crop_height, float jitter_x, float jitter_y) {
     const char* dir=std::getenv("TLG_DUMP_DIR");
     char path[512];std::snprintf(path,sizeof(path),"%s/f%03d_aa_info.txt",dir&&*dir?dir:"out/dump",frame);
     if(FILE* f=std::fopen(path,"wb")) {
         std::fprintf(f,"pre_fxaa_available=%u\npre_fxaa_gpu_address=0x%llx\npre_fxaa_vulkan_format=%u\n"
-                       "pre_fxaa_extent=%ux%u\ncaptured_extent=%ux%u\nfsr_input=post_fxaa_composite\n"
+                       "pre_fxaa_extent=%ux%u\ncaptured_extent=%ux%u\nfsr_input=%s\n"
                        "jitter_render_pixels=%.9g,%.9g\n",
                      unsigned(available),(unsigned long long)address,format,width,height,
-                     crop_width,crop_height,jitter_x,jitter_y);
+                     crop_width,crop_height,original_input?"pre_fxaa_original":"post_fxaa_composite",jitter_x,jitter_y);
         std::fclose(f);
     }
 }
@@ -2120,6 +2121,10 @@ void TemporalUpscaler::RunScaled() {
     vk::Image depth_image = depth.GetImage(), color_image = color.GetImage();
     vk::ImageView depth_view{}, color_view{};
     u32 source_width = iw, source_height = ih;
+    vk::ImageUsageFlags color_usage = color.usage_flags;
+#ifdef ISS_ANDROID_BIONIC
+    bool original_aa_input = false;
+#endif
     if (!scaled_session) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
@@ -2163,6 +2168,39 @@ void TemporalUpscaler::RunScaled() {
         color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
+#ifdef ISS_ANDROID_BIONIC
+        // Capture (13): this exact RGBA8 scene loses edge detail in FXAA before
+        // FSR. Keep the guest AA/composite pass and its target, but give FSR the
+        // verified original scene. Do not use HDR, G-buffer or guessed targets.
+        if (iss_aa_prefilter) {
+            auto& original = texture_cache.GetImage(iss_aa_prefilter);
+            const char* mode = std::getenv("ISS_FSR3_PRE_FXAA");
+            original_aa_input = IssFsrInput::UseOriginal(scaled_session,
+                TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3,
+                !mode || mode[0] != '0',
+                {true, bool(original.usage_flags & vk::ImageUsageFlagBits::eSampled),
+                 u32(original.info.pixel_format), original.info.size.width, original.info.size.height},
+                {true, true, u32(color.info.pixel_format), iw, ih},
+                u32(vk::Format::eR8G8B8A8Unorm));
+            if (original_aa_input) {
+                color_image = original.GetImage();
+                color_view = CachedView(original, original.info.pixel_format, vk::ImageAspectFlagBits::eColor);
+                color_usage = original.usage_flags;
+                runtime.Transit(&original, vk::ImageLayout::eGeneral,
+                                vk::PipelineStageFlagBits2::eComputeShader,
+                                vk::AccessFlagBits2::eShaderRead);
+                static bool reported = false;
+                if (!reported) {
+                    reported = true;
+                    std::printf("FSR3 ISS: original pre-FXAA RGBA8 scene selected; guest AA/HUD target preserved\n");
+                }
+            }
+        }
+        if (original_aa_input != iss_fsr_used_original_aa) {
+            reset = true; // never mix history from different spatial filters
+            iss_fsr_used_original_aa = original_aa_input;
+        }
+#endif
         runtime.FlushBarriers();
     }
 
@@ -2290,7 +2328,7 @@ void TemporalUpscaler::RunScaled() {
     info.structSize = sizeof(info);
     info.commandBuffer = cmdbuf;
     info.color = Describe(color_image, color.info.pixel_format, source_width, source_height,
-                          color.usage_flags, vk::ImageAspectFlagBits::eColor,
+                          color_usage, vk::ImageAspectFlagBits::eColor,
                           FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
     info.depth = Describe(depth_image, depth_format, source_width, source_height, depth.usage_flags,
                           vk::ImageAspectFlagBits::eDepth,
@@ -2408,9 +2446,17 @@ void TemporalUpscaler::RunScaled() {
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{depth_image, source_width, source_height, 4, "depth", "f32",
                          vk::ImageAspectFlagBits::eDepth}});
-            DumpAaInfo(dump, bool(iss_aa_prefilter), iss_aa_capture.address,
+            DumpAaInfo(dump, bool(iss_aa_prefilter), original_aa_input, iss_aa_capture.address,
                        iss_aa_capture.format, iss_aa_capture.width, iss_aa_capture.height,
                        w, h, info.jitterOffset.x, info.jitterOffset.y);
+            // Preserve the filtered output as a separate diagnostic stage now
+            // that the SDK input may be the original scene.
+            runtime.Transit(&color, vk::ImageLayout::eGeneral,
+                            vk::PipelineStageFlagBits2::eTransfer,
+                            vk::AccessFlagBits2::eTransferRead);
+            runtime.FlushBarriers();
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{color.GetImage(), w, h, 4, "aa_after_fxaa", "rgba"}});
             if (iss_aa_prefilter) {
                 auto& pre = texture_cache.GetImage(iss_aa_prefilter);
                 const auto encoding = AaEncoding(pre.info.pixel_format);
