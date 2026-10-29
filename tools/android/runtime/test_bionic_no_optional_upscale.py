@@ -177,7 +177,7 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("FSR3 ISS AA PM4 marker installed", probe)
         self.assertIn("0x49534101u", probe)
         self.assertIn("0x49534101u", liverpool)
-        self.assertIn("IssAaOutputMarker(gpu_addr, image_width, image_height)", liverpool)
+        self.assertIn("IssAaOutputMarker(gpu_addr, image_width, image_height, aa_input_addr)", liverpool)
         self.assertIn("DrainDrawPipe(5)", raster)
         self.assertIn("FindImageFromRange(gpu_addr, 4, false)", upscaler)
         self.assertIn("FSR3 ISS AA marker: reconstructed at AA boundary", upscaler)
