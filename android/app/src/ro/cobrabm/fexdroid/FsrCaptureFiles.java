@@ -24,16 +24,18 @@ final class FsrCaptureFiles {
   // A ready export needs all four original buffers from the same frame, not
   // merely four arbitrary files (e.g. two half-written captures).
   for(int frame=0;frame<2;frame++){
-   String prefix=String.format(java.util.Locale.ROOT,"f%03d_",frame);int bits=0;boolean needAa=false;
+   String prefix=String.format(java.util.Locale.ROOT,"f%03d_",frame);int bits=0;boolean needAa=false,needPost=false;
    for(File f:files){String n=f.getName();if(!n.startsWith(prefix))continue;
     if(n.startsWith(prefix+"input_"))bits|=1;if(n.startsWith(prefix+"motion_"))bits|=2;
     if(n.startsWith(prefix+"depth_"))bits|=4;if(n.startsWith(prefix+"output_"))bits|=8;
     if(n.startsWith(prefix+"aa_before_fxaa_"))bits|=16;
+    if(n.startsWith(prefix+"aa_after_fxaa_"))bits|=32;
     if(n.equals(prefix+"aa_info.txt"))try{
-     needAa=new String(java.nio.file.Files.readAllBytes(f.toPath()),java.nio.charset.StandardCharsets.UTF_8).contains("pre_fxaa_available=1");
+     String info=new String(java.nio.file.Files.readAllBytes(f.toPath()),java.nio.charset.StandardCharsets.UTF_8);
+     needAa=info.contains("pre_fxaa_available=1");needPost=info.contains("fsr_input=pre_fxaa_original");
     }catch(java.io.IOException e){return false;}
    }
-   if((bits&15)!=15||(needAa&&(bits&16)==0))return false;
+   if((bits&15)!=15||(needAa&&(bits&16)==0)||(needPost&&(bits&32)==0))return false;
   }
   return true;
  }

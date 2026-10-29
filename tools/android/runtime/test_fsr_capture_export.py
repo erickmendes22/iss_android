@@ -16,7 +16,7 @@ public class CaptureExportTest {
    String p=String.format("f%03d_",f);
    file(dir,p+"input_2x2_rgba.raw",16);file(dir,p+"output_4x4_rgba.raw",64);
    file(dir,p+"motion_2x2_rg16f.raw",16);file(dir,p+"depth_2x2_f32.raw",16);
-   Files.write(new File(dir,p+"aa_info.txt").toPath(),"pre_fxaa_available=1\n".getBytes("UTF-8"));
+   Files.write(new File(dir,p+"aa_info.txt").toPath(),"pre_fxaa_available=1\nfsr_input=pre_fxaa_original\n".getBytes("UTF-8"));
   }
   assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // GPU copies not ready
   file(dir,"f000_aa_before_fxaa_2x2_rgba16f.raw",32);
@@ -27,6 +27,9 @@ public class CaptureExportTest {
   file(dir,"f001_aa_before_fxaa_2x2_rgba.raw",16);
   file(dir,"f000_input_999999999999999999999x2_rgba.raw",16);
   file(dir,"user-save.raw",16);file(dir,"f001_input_2x2_rgba.raw.tmp",16);
+  file(dir,"f001_aa_after_fxaa_2x2_rgba.raw",15);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f001_aa_after_fxaa_2x2_rgba.raw",16);
   File[] selected=FsrCaptureFiles.select(dir);assert selected.length==14;
   assert FsrCaptureFiles.complete(selected);
   ByteArrayOutputStream bytes=new ByteArrayOutputStream();
