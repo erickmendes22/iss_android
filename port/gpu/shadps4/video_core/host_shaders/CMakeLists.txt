@@ -46,6 +46,7 @@ add_host_shader(fs_tri.vert fs_tri_vert)
 add_host_shader(fsr.comp fsr_easu_comp SAMPLE_EASU=1)
 add_host_shader(fsr.comp fsr_rcas_comp SAMPLE_RCAS=1)
 add_host_shader(taa_sharpen.comp taa_sharpen_comp)
+add_host_shader(iss_detail_reactive.comp iss_detail_reactive_comp)
 add_host_shader(post_process.frag post_process_frag)
 
 foreach(BPP IN ITEMS 8 16 32 64 96 128)

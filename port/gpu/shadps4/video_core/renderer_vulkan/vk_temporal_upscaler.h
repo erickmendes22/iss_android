@@ -321,6 +321,12 @@ private:
     vk::UniqueDescriptorSetLayout reactive_desc_layout;
     vk::UniquePipelineLayout reactive_pipeline_layout;
     vk::UniquePipeline reactive_pipeline;
+#ifdef ISS_ANDROID_BIONIC
+    // Separate FSR3 input-detail reactivity; never alter the HDR transparency mask pipeline.
+    vk::UniqueDescriptorSetLayout iss_detail_reactive_desc_layout;
+    vk::UniquePipelineLayout iss_detail_reactive_pipeline_layout;
+    vk::UniquePipeline iss_detail_reactive_pipeline;
+#endif
     vk::UniqueDescriptorSetLayout merge_desc_layout;
     vk::UniquePipelineLayout merge_pipeline_layout;
     vk::UniquePipeline merge_pipeline;

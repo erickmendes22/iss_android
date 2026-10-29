@@ -20,6 +20,9 @@
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
 #include "video_core/host_shaders/upscale_reactive_comp.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "video_core/host_shaders/iss_detail_reactive_comp.h"
+#endif
 #include "video_core/host_shaders/taa_comp.h"
 #include "video_core/host_shaders/taa_sharpen_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
@@ -1005,6 +1008,31 @@ void TemporalUpscaler::CreatePipelines() {
     merge_pipeline = compute(UPSCALE_MERGE_COMP, *merge_pipeline_layout);
     storage_layout(3, reactive_desc_layout, reactive_pipeline_layout, 3 * sizeof(float));
     reactive_pipeline = compute(UPSCALE_REACTIVE_COMP, *reactive_pipeline_layout);
+#ifdef ISS_ANDROID_BIONIC
+    // On low-resolution ISS frames the captured FSR3 accumulation saturates for
+    // almost every pixel. Generate a conservative detail-aware reactive mask to
+    // let current samples contribute in textured regions, not the HUD or flat sky.
+    // This uses a separate shader and descriptor layout from HDR transparency.
+    {
+        const std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
+            {.binding = 0, .descriptorType = vk::DescriptorType::eSampledImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        }};
+        iss_detail_reactive_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = u32(bindings.size()), .pBindings = bindings.data()}));
+        const vk::PushConstantRange push{
+            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0,
+            .size = sizeof(float)};
+        iss_detail_reactive_pipeline_layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1, .pSetLayouts = &*iss_detail_reactive_desc_layout,
+            .pushConstantRangeCount = 1, .pPushConstantRanges = &push}));
+        iss_detail_reactive_pipeline = compute(
+            ISS_DETAIL_REACTIVE_COMP, *iss_detail_reactive_pipeline_layout);
+    }
+#endif
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
@@ -2419,6 +2447,77 @@ void TemporalUpscaler::RunScaled() {
             vk::ImageAspectFlagBits::eColor, FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
     }
 
+#ifdef ISS_ANDROID_BIONIC
+    // ZIP (15): the SDK's previous color history survives byte-for-byte,
+    // with accumulation at 255 across 99.8%+ of the frame. Motion, source
+    // selection and jitter were checked against captures (13-15).
+    // Apply *bounded* reactivity at high-contrast fine details, so FSR3's
+    // temporal blend does not continue suppressing every new sample.
+    // Keep all FSR motion, history, jitter and RCAS parameters unchanged.
+    // ISS_FSR3_DETAIL_REACTIVE=0 restores the original accumulation behavior.
+    if (scaled_session && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        source_width == w && source_height == h &&
+        color.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+        !mask_ready && iss_detail_reactive_pipeline) {
+        const char* setting = std::getenv("ISS_FSR3_DETAIL_REACTIVE");
+        if (!setting || setting[0] != '0') {
+            const vk::Image mask_image = vk::Image(reactive_image);
+            const vk::ImageMemoryBarrier2 to_write{
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryRead |
+                                 vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                .oldLayout = vk::ImageLayout::eUndefined,
+                .newLayout = vk::ImageLayout::eGeneral,
+                .image = mask_image,
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1,
+                                     .pImageMemoryBarriers = &to_write});
+            const vk::DescriptorImageInfo source_info{
+                .imageView = color_view, .imageLayout = vk::ImageLayout::eGeneral};
+            const vk::DescriptorImageInfo mask_info{
+                .imageView = *reactive_view, .imageLayout = vk::ImageLayout::eGeneral};
+            const std::array<vk::WriteDescriptorSet, 2> bindings{{
+                {.dstBinding = 0, .descriptorCount = 1,
+                 .descriptorType = vk::DescriptorType::eSampledImage,
+                 .pImageInfo = &source_info},
+                {.dstBinding = 1, .descriptorCount = 1,
+                 .descriptorType = vk::DescriptorType::eStorageImage,
+                 .pImageInfo = &mask_info},
+            }};
+            const float strength = w <= 640 ? 0.20f : 0.15f;
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *iss_detail_reactive_pipeline);
+            cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
+                                        *iss_detail_reactive_pipeline_layout, 0, bindings);
+            cmdbuf.pushConstants(*iss_detail_reactive_pipeline_layout,
+                                 vk::ShaderStageFlagBits::eCompute, 0,
+                                 sizeof(strength), &strength);
+            cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+            const vk::ImageMemoryBarrier2 to_read{
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+                .oldLayout = vk::ImageLayout::eGeneral,
+                .newLayout = vk::ImageLayout::eGeneral,
+                .image = mask_image,
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1,
+                                     .pImageMemoryBarriers = &to_read});
+            info.reactiveMask = Describe(mask_image, vk::Format::eR8Unorm, w, h,
+                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+                vk::ImageAspectFlagBits::eColor,
+                FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
+            static bool announced = false;
+            if (!announced) {
+                announced = true;
+                std::printf("FSR3 ISS: detail-adaptive temporal reactivity active "
+                            "(bounded <=0.20, env ISS_FSR3_DETAIL_REACTIVE=0 to disable)\n");
+            }
+        }
+    }
+#endif
     info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
     const float sign = TlgToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
 #ifdef ISS_ANDROID_BIONIC

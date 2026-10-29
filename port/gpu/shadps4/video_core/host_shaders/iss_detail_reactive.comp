@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// inFAMOUS Second Son Android: conservative detail-reactivity for FSR3 LDR scenes.
+// FSR3 remains the temporal upscaler; this is its standard reactive mask input.
+// Flat regions contribute zero; very fine scene detail contributes <= gain (0.20).
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform texture2D source_color;
+layout(binding = 1, r8) uniform writeonly image2D reactive;
+
+layout(push_constant) uniform Params { float gain; };
+
+float Luma(ivec2 coord) {
+    ivec2 size = textureSize(source_color, 0);
+    vec3 color = texelFetch(source_color, clamp(coord, ivec2(0), size - 1), 0).rgb;
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(reactive)))) return;
+
+    float center = Luma(pixel);
+    float adjacent = (Luma(pixel + ivec2(-1, 0)) +
+                      Luma(pixel + ivec2( 1, 0)) +
+                      Luma(pixel + ivec2( 0,-1)) +
+                      Luma(pixel + ivec2( 0, 1))) * 0.25;
+    // Local-detail-only signal. Relative contrast prevents well-lit textures
+    // and dim scene details from receiving wildly different history weights.
+    // The lower threshold suppresses flat areas, noise and quantization.
+    float detail = abs(center - adjacent) / max(center, 0.08);
+    float value = clamp(gain, 0.0, 0.20) * smoothstep(0.075, 0.40, detail);
+    imageStore(reactive, pixel, vec4(value, 0.0, 0.0, 0.0));
+}
