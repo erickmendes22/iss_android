@@ -748,10 +748,56 @@ static const unsigned char iss_aa_done_next_bytes[] = {0x4c,0x8d,0x3d,0xd3,0xe4,
  * If the command writer is full, skip the marker and retain the safe late FSR.
  * If FSR is off or the eboot signature differs, this callback is not installed. */
 enum { ISS_AA_DONE_NEXT = 0x192d06 };
+/* Preserve the AA's original input image as well as the output image.
+ * The upstream inFAMOUS PC hook records both, but the Android marker only
+ * reported the output. The extra capture is completely passive: FSR3 still
+ * consumes the same verified output and runs at the same command boundary.
+ * One tagged snapshot per guest thread avoids mixing gameplay and menu draws. */
+static __thread uintptr_t iss_aa_pending_context;
+static __thread uint64_t iss_aa_pending_input;
+static __thread uint64_t iss_aa_pending_output;
+static uint64_t iss_aa_descriptor_gpu_address(uintptr_t object) {
+    if (object <= 0x10000 || object >= (UINT64_C(1) << 40)) return 0;
+    uint32_t desc[3];
+    memcpy(desc, (const void *)(object + 0xb4), sizeof(desc));
+    return (((uint64_t)(desc[1] & 0x3fu) << 32) | desc[0]) << 8;
+}
+static void iss_fsr3_aa_begin_marker(GuestRegs *regs) {
+    const uintptr_t context = (uintptr_t)regs->gpr[GUEST_R13];
+    const uintptr_t input = (uintptr_t)regs->gpr[GUEST_R12];
+    const uintptr_t output = (uintptr_t)regs->gpr[GUEST_R15];
+    const uintptr_t post = (uintptr_t)regs->gpr[GUEST_R14];
+    const uintptr_t game_flags = (uintptr_t)(image + 0xf1bcd0);
+    const unsigned char disabled = *(const unsigned char *)(game_flags + 0xdf0f05);
+    iss_aa_pending_context = 0;
+    iss_aa_pending_input = iss_aa_pending_output = 0;
+    if (!disabled && post > 0x10000 && post < (UINT64_C(1) << 40) &&
+        !*((const unsigned char *)(post + 0x1eb8d)) &&
+        context > 0x10000 && context < (UINT64_C(1) << 40)) {
+        const uint64_t input_addr = iss_aa_descriptor_gpu_address(input);
+        const uint64_t output_addr = iss_aa_descriptor_gpu_address(output);
+        if (input_addr && output_addr) {
+            iss_aa_pending_context = context;
+            iss_aa_pending_input = input_addr;
+            iss_aa_pending_output = output_addr;
+        }
+    }
+    /* Replace precisely these guest instructions:
+     *   lea rax, [rip+0xd8907d] ; mov al, [rax+0xdf0f05]
+     * Neither changes CPU flags. Keep all other GPRs untouched. */
+    regs->gpr[GUEST_RAX] = (game_flags & ~UINT64_C(0xff)) | disabled;
+    regs->rip = (uintptr_t)(image + ISS_AA_NEXT);
+}
+
 static unsigned iss_aa_marker_wrote, iss_aa_marker_skipped;
 static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
     const uintptr_t context = (uintptr_t)regs->gpr[GUEST_R13];
     const uintptr_t output = (uintptr_t)regs->gpr[GUEST_R15];
+    const uint64_t aa_input_addr = iss_aa_pending_context == context &&
+        iss_aa_pending_output == iss_aa_descriptor_gpu_address(output)
+        ? iss_aa_pending_input : 0;
+    iss_aa_pending_context = 0;
+    iss_aa_pending_input = iss_aa_pending_output = 0;
     // Mirror the game's own two "no AA" gates at 0x192c59/0x192c60.
     // Without these gates the DONE site also fires in menus and photo mode.
     const uintptr_t post = (uintptr_t)regs->gpr[GUEST_R14];
@@ -772,11 +818,12 @@ static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
             unsigned char *end = NULL, *cursor = NULL;
             memcpy(&end, writer + 8, sizeof(end));
             memcpy(&cursor, writer + 0x10, sizeof(cursor));
-            if (end && cursor && end >= cursor && (size_t)(end-cursor) >= 28) {
-                const uint32_t marker[7] = {
-                    0xc0051000u, 0x49534101u, 1u,
+            if (end && cursor && end >= cursor && (size_t)(end-cursor) >= 36) {
+                const uint32_t marker[9] = {
+                    0xc0071000u, 0x49534101u, 1u,
                     (uint32_t)gpu_address, (uint32_t)(gpu_address >> 32),
                     width, height,
+                    (uint32_t)aa_input_addr, (uint32_t)(aa_input_addr >> 32),
                 };
                 memcpy(cursor, marker, sizeof(marker));
                 cursor += sizeof(marker);
@@ -853,6 +900,10 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
     puts("FSR3 ISS native AA: verified AA selection hook installed (FXAA + FSR3)");
     const char *marker_off = getenv("ISS_FSR3_AA_MARKER");
     if (!marker_off || marker_off[0] != '0') {
+        if (!guest_cpu_hook((uintptr_t)(image + ISS_AA_SITE),
+                            sizeof(iss_aa_site_bytes), iss_fsr3_aa_begin_marker)) {
+            fputs("FSR3 ISS AA input hook unavailable; output-only marker will continue\n", stderr);
+        }
         if (guest_cpu_hook((uintptr_t)(image + ISS_AA_DONE),
                            sizeof(iss_aa_done_site_bytes), iss_fsr3_aa_done_marker)) {
             puts("FSR3 ISS AA PM4 marker installed (after verified AA pass)");

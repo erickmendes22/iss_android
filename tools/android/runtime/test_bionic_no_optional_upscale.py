@@ -157,6 +157,17 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("Halton(jitter_index, 2)", renderer)
         self.assertIn("full-strength Vulkan Halton phase enabled", renderer)
 
+    def test_iss_fsr3_captures_aa_input_without_changing_scene_dispatch(self):
+        loader = (ROOT / "port/src/probe.c").read_text()
+        liverpool = (GPU / "shadps4/video_core/amdgpu/liverpool.cpp").read_text()
+        upscaler = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        self.assertIn("iss_fsr3_aa_begin_marker", loader)
+        self.assertIn("c0071000u", loader)
+        self.assertIn("aa_input_addr", liverpool)
+        self.assertIn('"aa_before_fxaa"', upscaler)
+        self.assertIn("ldr_target = image_id;", upscaler)
+        self.assertNotIn("ldr_target = iss_aa_prefilter;", upscaler)
+    
     def test_iss_fsr3_guest_aa_pm4_marker_and_fallback(self):
         probe = (ROOT / "port/src/probe.c").read_text()
         liverpool = (GPU / "shadps4/video_core/amdgpu/liverpool.cpp").read_text()

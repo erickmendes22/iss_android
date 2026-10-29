@@ -69,7 +69,7 @@ public:
     // No dispatch occurs until camera, depth and scene color were validated.
     void OnDisplayPassStart();
     // Explicit CUSA00004 PM4 marker after the game's AA and colour composite.
-    void OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height);
+    void OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, u64 aa_input_addr);
     bool OnFrameStart();
     bool RasterScaling() const;
     /// tlg: LOD bias for scene materials, log2(render / output) while a reduced scene is
@@ -225,6 +225,9 @@ private:
     u32 target_width = 1920, target_height = 1080; ///< output size of scaled presets
     u64 ui_trigger_vs = 0x34e8a281;
     VideoCore::ImageId ldr_target{};
+#ifdef ISS_ANDROID_BIONIC
+    VideoCore::ImageId iss_aa_prefilter{}; // passive pre-FXAA capture, never FSR input
+#endif
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
     bool display_redirect = false; ///< the display pass of an upscaled frame

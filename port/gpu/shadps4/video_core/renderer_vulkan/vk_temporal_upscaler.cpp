@@ -462,6 +462,9 @@ bool TemporalUpscaler::OnFrameStart() {
     iss_scene_depth_snapshot_valid = false;
 #endif
     ldr_target = {};
+#ifdef ISS_ANDROID_BIONIC
+    iss_aa_prefilter = {};
+#endif
     scene_color = {};
     snapshot_taken = false;
     opaque_valid = false;
@@ -1972,9 +1975,9 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     ui_depth = depth_id;
 }
 
-void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height) {
+void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, u64 aa_input_addr) {
 #ifndef ISS_ANDROID_BIONIC
-    (void)gpu_addr; (void)width; (void)height;
+    (void)gpu_addr; (void)width; (void)height; (void)aa_input_addr;
 #else
     static u32 markers = 0, used = 0;
     ++markers;
@@ -2005,6 +2008,29 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height) 
             (unsigned long long)gpu_addr, unsigned(image.info.pixel_format),
             image.info.size.width, image.info.size.height);
         return;
+    }
+    // A passive capture of the AA's input shows how much detail FXAA
+    // filtered before the scene enters FSR3. Do not substitute the input
+    // for the composite: the game's colour processing must remain intact.
+    iss_aa_prefilter = {};
+    if (aa_input_addr && aa_input_addr != gpu_addr) {
+        const auto pre = texture_cache.FindImageFromRange(aa_input_addr, 4, false);
+        if (pre) {
+            const auto& src = texture_cache.GetImage(pre);
+            if (src.info.guest_address == aa_input_addr &&
+                src.info.size.width == width && src.info.size.height == height &&
+                src.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+                (src.usage_flags & vk::ImageUsageFlagBits::eSampled)) {
+                iss_aa_prefilter = pre;
+            }
+            static bool reported_pre = false;
+            if (!reported_pre) {
+                reported_pre = true;
+                std::printf("FSR3 ISS: pre-FXAA GPU=0x%llx fmt=%u %ux%u capture=%u\n",
+                    (unsigned long long)aa_input_addr, unsigned(src.info.pixel_format),
+                    src.info.size.width, src.info.size.height, unsigned(bool(iss_aa_prefilter)));
+            }
+        }
     }
     // The game has FINISHED its AA composite at this exact marker. Do not run
     // on the G-buffer or before colour tonemapping (the former cyan regression).
@@ -2346,6 +2372,11 @@ void TemporalUpscaler::RunScaled() {
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{depth_image, source_width, source_height, 4, "depth", "f32",
                          vk::ImageAspectFlagBits::eDepth}});
+            if (iss_aa_prefilter) {
+                const auto& pre = texture_cache.GetImage(iss_aa_prefilter);
+                DumpImages(instance, scheduler, cmdbuf, dump,
+                           {{pre.GetImage(), w, h, 4, "aa_before_fxaa", "rgba"}});
+            }
         }
 #endif
     }

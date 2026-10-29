@@ -893,8 +893,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                          (u64(nop->data_block[3]) << 32);
                     const u32 image_width = nop->data_block[4];
                     const u32 image_height = nop->data_block[5];
+                    const u64 aa_input_addr = nop->header.count.Value() >= 7
+                        ? u64(nop->data_block[6]) | (u64(nop->data_block[7]) << 32) : 0;
                     if (rasterizer) {
-                        rasterizer->IssAaOutputMarker(gpu_addr, image_width, image_height);
+                        rasterizer->IssAaOutputMarker(gpu_addr, image_width, image_height, aa_input_addr);
                     }
                     break;
                 }

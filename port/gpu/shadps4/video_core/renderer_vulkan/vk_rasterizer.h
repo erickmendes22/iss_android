@@ -88,7 +88,7 @@ public:
     }
 
     // Exact AA-completion marker from the inFAMOUS guest PM4 stream.
-    void IssAaOutputMarker(u64 gpu_addr, u32 width, u32 height);
+    void IssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, u64 aa_input_addr);
     void ScopeMarkerBegin(const std::string_view& str, bool from_guest = false);
     void ScopeMarkerEnd(bool from_guest = false);
     void ScopedMarkerInsert(const std::string_view& str, bool from_guest = false);
