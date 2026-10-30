@@ -1,4 +1,4 @@
-"""Exercise the production motion SPIR-V with positive and negative surfaces."""
+"""Exercise the production motion SPIR-V with paired surfaces and rejected foreign-layer vectors."""
 from array import array
 import os
 from pathlib import Path
@@ -8,15 +8,15 @@ import tempfile
 import unittest
 
 
-class MotionRecoveryGpu(unittest.TestCase):
+class MotionSurfacePairGpu(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('ISS_MOTION_REPLAY') and os.environ.get('ISS_MOTION_SPIRV'),
                          'requires the standalone Vulkan motion replay harness')
-    def test_validity_depth_direction_and_outlier_guards(self):
+    def test_direct_surface_vectors_and_foreign_layer_rejection(self):
         width, height = 640, 360
         depth = array('f', [.01]) * (width * height)
         objects = array('f', [0]) * (width * height * 4)
         cases = [
-            ('recover', 1, .044, (1.2, 0), [(1, 0)] * 3, .05, 1, 1),
+            ('foreign_layer_despite_neighbours', 1, .044, (1.2, 0), [(1, 0)] * 3, .05, 1, 0),
             ('no_target_history', 0, .044, (1.2, 0), [(1, 0)] * 3, .05, 1, 0),
             ('foreign_depth', 1, .044, (1.2, 0), [(1, 0)] * 3, .01, 1, 0),
             ('target_outlier', 1, .044, (100, 0), [(1, 0)] * 3, .05, 1, 0),
@@ -26,6 +26,7 @@ class MotionRecoveryGpu(unittest.TestCase):
             ('no_source_history', 1, .044, (1.2, 0), [(1, 0)] * 3, .05, 0, 0),
             ('static', 1, .044, (.04, 0), [(1, 0)] * 3, .05, 1, 0),
             ('valid_target', 1, .05, (.4, 0), [(1, 0)] * 3, .05, 1, .4),
+            ('paired_front_surface', 1, .05, (1.2, 0), [(1, 0)] * 3, .05, 1, 1.2),
             ('nonfinite', 1, .044, (float('nan'), 0), [(1, 0)] * 3, .05, 1, 0),
         ]
         locations = []
@@ -42,7 +43,7 @@ class MotionRecoveryGpu(unittest.TestCase):
                 depth[pixel] = source_depth
                 objects[pixel * 4:pixel * 4 + 4] = array('f', [*velocity, source_valid, source_depth])
             locations.append((name, x, y, expected))
-        # The same recovery at the viewport corner must not sample outside it.
+        # A mismatched layer at the viewport corner must also be rejected.
         for yy in range(8):
             for xx in range(8):
                 depth[yy * width + xx] = .05
@@ -50,7 +51,7 @@ class MotionRecoveryGpu(unittest.TestCase):
         for xx, yy in ((1, 0), (0, 1), (1, 1)):
             at = (yy * width + xx) * 4
             objects[at:at + 4] = array('f', [1, 0, 1, .05])
-        locations.append(('viewport_corner', 0, 0, 1))
+        locations.append(('viewport_corner', 0, 0, 0))
         for yy in range(183, 198):
             for xx in range(13, 28):
                 depth[yy * width + xx] = .05

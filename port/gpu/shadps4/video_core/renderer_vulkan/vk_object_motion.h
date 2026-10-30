@@ -45,6 +45,12 @@ public:
     /// Rendering of a motion pipeline: the motion attachment (render-target size).
     void Attach(RenderState& state, u32 width, u32 height);
 
+#ifdef ISS_ANDROID_BIONIC
+    /// Seal the opaque motion attachment at the same boundary as scene depth.
+    /// Later guest passes may reuse depth/MRTs; they must not replace this pair.
+    void SealIssScene() noexcept { scene_sealed = true; }
+#endif
+
     /// Start of a frame (display pass).
     void OnFrameStart();
     void InvalidateHistory() { history.NextFrame(); history.NextFrame(); }
@@ -94,6 +100,9 @@ private:
     VideoCore::UniqueImage image;
     vk::UniqueImageView view;
     u32 image_width = 0, image_height = 0;
+#ifdef ISS_ANDROID_BIONIC
+    bool scene_sealed = false;
+#endif
     bool written = false; ///< this frame's vectors are in the image
     vk::ImageLayout image_layout = vk::ImageLayout::eUndefined;
 };

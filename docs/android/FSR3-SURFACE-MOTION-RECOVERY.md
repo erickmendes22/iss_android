@@ -1,5 +1,9 @@
 # Captured-buffer validation of visible-surface motion recovery
 
+**Superseded after capture 25:** this local capture-23 improvement did not resolve
+the reported face problem. The neighbor recovery is withdrawn. See
+`FSR3-CAPTURE25-PAIRED-STAGE.md` for the resource-lifetime correction and its limits.
+
 Base: 2de9ae9c. Keep submission-owned camera snapshots. Do not reinstate the
 withdrawn fragment-depth experiment. No Readback, resolution, reactivity,
 sharpening, history reset, runtime logging or game-rendering change.

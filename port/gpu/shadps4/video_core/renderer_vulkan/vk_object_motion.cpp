@@ -122,6 +122,9 @@ void ObjectMotion::OnFrameStart() {
         params_ticks[slot] = 0;
     }
     params_used = 0;
+#ifdef ISS_ANDROID_BIONIC
+    scene_sealed = false;
+#endif
     written = false;
     scheduler.EndRendering();
     // Last frame's stores must be visible to this frame's loads. Also finish old reads
@@ -138,6 +141,11 @@ void ObjectMotion::OnFrameStart() {
 }
 
 u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
+#ifdef ISS_ANDROID_BIONIC
+    // Do not let post-lighting passes replace next frame's opaque vertex history,
+    // even though their already-compiled motion pipeline still executes.
+    if (scene_sealed) return 0;
+#endif
     if (!enabled || TlgToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
         return 0;
     }
@@ -198,6 +206,16 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
 
 void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
     constexpr u32 slot = Shader::MotionVectors::Output;
+#ifdef ISS_ANDROID_BIONIC
+    if (scene_sealed) {
+        // Dynamic rendering permits an unused (null) color attachment. Keep the
+        // pipeline's output slot, but discard its late motion output. In particular,
+        // do not resize/clear the sealed scene image for a later auxiliary pass.
+        state.color_attachments[slot] = {};
+        state.num_color_attachments = std::max<u16>(state.num_color_attachments, slot + 1);
+        return;
+    }
+#endif
     EnsureImage(width, height);
     auto& attachment = state.color_attachments[slot];
     attachment = {};

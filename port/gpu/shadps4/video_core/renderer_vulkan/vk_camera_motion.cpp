@@ -186,6 +186,10 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
 }
 
 #ifdef ISS_ANDROID_BIONIC
+void CameraMotion::SealIssSceneMotion() {
+    if (object_motion) object_motion->SealIssScene();
+}
+
 void CameraMotion::PrepareIssNativeCamera() {
     // The fullscreen upscale consumes this game's native scene depth.
     // Use the camera copied with these submitted commands. Reading the live

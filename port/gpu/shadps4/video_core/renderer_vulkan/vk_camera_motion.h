@@ -73,6 +73,7 @@ public:
     }
     // Latch the submission's camera and the preceding scene-frame matrix.
     void PrepareIssNativeCamera();
+    void SealIssSceneMotion();
     [[nodiscard]] bool IssNativeCameraReady() const noexcept {
         return native_motion_valid && Ready();
     }

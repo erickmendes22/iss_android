@@ -1911,12 +1911,17 @@ void TemporalUpscaler::SnapshotIssSceneDepth(VideoCore::ImageId depth_id) {
     ready.oldLayout = vk::ImageLayout::eTransferDstOptimal;
     ready.newLayout = vk::ImageLayout::eGeneral;
     cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ready});
+    // The depth copy and object vectors must describe the SAME geometry stage.
+    // The old path saved depth here, but kept the motion target/history writable
+    // until AA. Later skin/material/auxiliary passes could replace only one side
+    // of the pair; depth rejection then discarded visible-surface motion.
+    camera_motion.SealIssSceneMotion();
     iss_scene_depth_snapshot_valid = true;
     static bool logged = false;
     if (!logged) {
         logged = true;
         std::printf("FSR3 ISS: copying G-buffer scene depth %ux%u before HUD reuse; "
-                    "FSR receives preserved depth, not the later UI depth\n", w, h);
+                    "opaque object motion and vertex history sealed at the same boundary\n", w, h);
     }
 }
 #endif
