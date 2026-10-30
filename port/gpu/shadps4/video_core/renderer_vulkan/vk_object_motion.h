@@ -74,7 +74,13 @@ private:
     static constexpr u32 ParamsPerFrame = 8192;
     // Positions (device local): two halves (current/previous frame) of vec4; element 0 is reserved.
     static constexpr u32 PositionsPerFrame = 4u << 20;
+#ifdef ISS_ANDROID_BIONIC
+    // Shared ISS meshes can change occurrence order after visibility culling.
+    // Do not interpret another instance's vertex history as object motion.
+    Motion::History history{PositionsPerFrame, true};
+#else
     Motion::History history{PositionsPerFrame};
+#endif
     Motion::IndexRangeCache index_ranges;
     std::array<u64, FrameSlots> params_ticks{};
     vk::Buffer params_buffer{};

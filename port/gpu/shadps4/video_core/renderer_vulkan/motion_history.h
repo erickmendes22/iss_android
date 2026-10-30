@@ -223,7 +223,8 @@ struct Draw {
 // offsets: a reused index buffer or another submesh must never read uninitialised history.
 class History {
 public:
-    explicit History(uint32_t capacity) : capacity{capacity} {}
+    explicit History(uint32_t capacity, bool unique_history = false)
+        : capacity{capacity}, unique_history{unique_history} {}
 
     struct Allocation {
         uint32_t store{}, load{}, vertices{}, instances{}, first_vertex{}, first_instance{};
@@ -254,6 +255,7 @@ public:
     void NextFrame() {
         previous.swap(current);
         current.clear();
+        if (unique_history) previous_occurrences.swap(occurrences);
         occurrences.clear();
         gate_previous.swap(gate_current);
         gate_current.clear();
@@ -273,6 +275,15 @@ public:
             return {};
         }
         const auto* prev = previous.find(key);
+        if (unique_history && prev) {
+            // Occurrence order is not an object identity. If A and B share a
+            // mesh and B becomes the first visible draw, matching occurrence
+            // zero would load A's positions. Reuse only an unambiguous prior
+            // draw; otherwise the motion compose pass retains camera motion.
+            Key identity{draw, 0};
+            const auto* count = previous_occurrences.find(identity);
+            if (key.occurrence != 0 || !count || *count != 1) prev = nullptr;
+        }
         Allocation result{0, 0, draw.vertices.count, draw.instances,
                           draw.vertices.first, draw.first_instance};
         if (prev) {
@@ -312,8 +323,10 @@ private:
         }
     };
     uint32_t capacity{}, used{};
+    bool unique_history{};
     uint64_t frame{};
     FlatMap<Key, uint32_t, Hash> previous, current, occurrences;
+    FlatMap<Key, uint32_t, Hash> previous_occurrences;
     struct GateHash {
         size_t operator()(const GateKey& key) const {
             uint64_t h = 0;
