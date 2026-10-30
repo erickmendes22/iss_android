@@ -2112,7 +2112,7 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
     ++markers;
     if (!Scaled() || !scaled_session || done_this_frame || failed || !Active() ||
         TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3 ||
-        !camera_motion.Ready() || !camera_motion.Depth()) return;
+        !camera_motion.Depth()) return;
     if (width != render_width || height != render_height) {
         if (markers <= 4) std::printf("FSR3 ISS AA marker: dimensions %ux%u vs render %ux%u; fallback\\n",
                                       width,height,render_width,render_height);
@@ -2138,9 +2138,10 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
             image.info.size.width, image.info.size.height);
         return;
     }
-    // A passive capture of the AA's input shows how much detail FXAA
-    // filtered before the scene enters FSR3. Do not substitute the input
-    // for the composite: the game's colour processing must remain intact.
+    // Remember this frame's verified AA input even if native camera history
+    // is not ready yet. Capture (19) lost it at the old Ready() early return,
+    // then the display fallback fed the post-FXAA/HUD composite to FSR and
+    // reset its history. Never carry an input address across frame boundaries.
     iss_aa_prefilter = {};
     iss_aa_capture = {};
     iss_aa_capture.address = aa_input_addr;
@@ -2169,6 +2170,12 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
     // The game has FINISHED its AA composite at this exact marker. Do not run
     // on the G-buffer or before colour tonemapping (the former cyan regression).
     ldr_target = image_id;
+    // Ready() can describe the preceding boundary until the completed native
+    // sample is latched. Refresh it here, before deciding whether this marker
+    // can dispatch. If it is still unavailable, leave the verified source for
+    // the existing display fallback; do not invent or reuse a camera matrix.
+    camera_motion.PrepareIssNativeCamera();
+    if (!camera_motion.Ready()) return;
     RunScaled();
     if (ui_phase && ++used <= 4) {
         std::printf("FSR3 ISS AA marker: reconstructed at AA boundary, GPU=0x%llx, size=%ux%u\\n",
