@@ -30,6 +30,61 @@ layout(push_constant) uniform Constants {
                        // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|
 };
 
+#ifndef DEBUG_OVERLAY
+// A later G-buffer layer can replace a surface's object tag with a different
+// depth. Keep the depth rejection, but do not label that animated surface as
+// stationary when nearby samples still describe its visible depth and motion.
+// This is validity-aware hole recovery before FSR's nearest-depth dilation;
+// FSR cannot distinguish a camera fallback from a genuine zero object vector.
+vec2 RecoverSurfaceMotion(ivec2 pixel, float depth, vec2 camera,
+                          vec2 rejected_candidate, vec2 max_difference) {
+    if (isnan(depth) || isinf(depth)) return camera;
+    const vec2 reference = rejected_candidate - camera;
+    const float reference_speed2 = dot(reference, reference);
+    if (reference_speed2 <= 0.0225) return camera; // preserve subpixel/static cases
+    vec2 weighted_motion = vec2(0.0);
+    float weighted_square = 0.0;
+    float weights = 0.0;
+    uint count = 0u;
+    const float surface_threshold = max(2e-7, depth * 0.005);
+    for (int y = -6; y <= 6; ++y) {
+        for (int x = -6; x <= 6; ++x) {
+            const ivec2 at = pixel + ivec2(x, y);
+            if (any(lessThan(at, ivec2(0))) || any(greaterThanEqual(at, ivec2(size))))
+                continue;
+            const vec4 neighbour = texelFetch(object_tex, at, 0);
+            if (neighbour.b <= 0.99 || any(isnan(neighbour)) || any(isinf(neighbour)))
+                continue;
+            const float neighbour_depth = texelFetch(depth_tex, at, 0).r;
+            if (isnan(neighbour_depth) || isinf(neighbour_depth) ||
+                abs(neighbour_depth - depth) >= surface_threshold ||
+                abs(neighbour.a - neighbour_depth) >= max(2e-7, neighbour_depth * 0.005))
+                continue;
+            const vec2 motion = neighbour.rg + previous_jitter - camera;
+            if (any(greaterThanEqual(abs(motion), max_difference))) continue;
+            const float speed2 = dot(motion, motion);
+            const float direction = dot(motion, reference);
+            const vec2 difference = motion - reference;
+            if (speed2 <= 0.0025 || speed2 <= reference_speed2 * 0.0625 ||
+                speed2 >= reference_speed2 * 16.0 || direction <= 0.0 ||
+                direction * direction <= 0.5 * speed2 * reference_speed2 ||
+                dot(difference, difference) >= 1.0)
+                continue;
+            const float weight = 1.0 / float(x*x + y*y + 1);
+            weighted_motion += weight * motion;
+            weighted_square += weight * speed2;
+            weights += weight;
+            ++count;
+        }
+    }
+    if (count < 3u) return camera;
+    const vec2 mean = weighted_motion / weights;
+    const float variance = weighted_square / weights - dot(mean, mean);
+    if (variance > 0.09 || any(isnan(mean)) || any(isinf(mean))) return camera;
+    return camera + mean;
+}
+#endif
+
 void main() {
     const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (pixel.x >= int(size.x) || pixel.y >= int(size.y)) {
@@ -101,10 +156,14 @@ void main() {
             const vec2 disagreement = abs(candidate - result);
             const vec2 max_difference = max(vec2(4.0), size * 0.0125);
             if (object_motion.b > 0.99 &&
-                abs(object_motion.a - depth) < threshold &&
+                !any(isnan(object_motion)) && !any(isinf(object_motion)) &&
                 !any(isnan(candidate)) && !any(isinf(candidate)) &&
                 all(lessThan(disagreement, max_difference))) {
-                result = candidate;
+                if (abs(object_motion.a - depth) < threshold) {
+                    result = candidate;
+                } else {
+                    result = RecoverSurfaceMotion(pixel, depth, result, candidate, max_difference);
+                }
             }
         }
         imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));

@@ -18,10 +18,13 @@ It also cannot prove that the change caused the reported regression elsewhere
 in the session. Its removal is a conservative rollback, not a confirmed fix.
 
 There are 208761/210226 history-valid object pixels in frames 0/1;
-206728/208180 also pass the unchanged scene-depth gate. The rectangular ROI
-x326..350, y164..198 has 100% valid B in both frames, with 92.52%/96.94%
-passing the depth gate. This is a different pose/lighting from capture 22;
-these percentages are not a controlled visual improvement comparison.
+206728/208180 also pass the unchanged scene-depth gate. The initial rectangular
+ROI x326..350, y164..198 was incorrectly reused from capture 22. In capture 23
+it includes substantial background, because the head has moved left. Its
+92.52%/96.94% matching percentages do NOT describe the face. The corrected face
+ROI x305..324, y168..191 contains 437 pixels, all history-valid in both frames.
+Only 62/437 and 56/437 pass the original depth gate. This invalidates the earlier
+inference that facial depth rejection had improved.
 
 The SDK reports dispatches 839/840, reset=0, history indices 1/2. Thus the
 requested pair itself does not reset, but begins just after a history restart.
