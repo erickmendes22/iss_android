@@ -174,12 +174,22 @@ static void EmitFragmentMotion(EmitContext& ctx) {
     const Id front = ctx.OpLogicalAnd(ctx.U1[1],
         ctx.OpFOrdGreaterThan(ctx.U1[1], ctx.OpCompositeExtract(f32_type, previous, 3u), epsilon),
         ctx.OpFOrdGreaterThan(ctx.U1[1], ctx.OpCompositeExtract(f32_type, current, 3u), epsilon));
-    const Id valid = ctx.OpSelect(f32_type, front,
+    Id valid = ctx.OpSelect(f32_type, front,
                                   ctx.OpCompositeExtract(f32_type, previous, 2u), zero);
     // Uninstrumented draws can overwrite the final scene depth after this pixel was
     // written. Preserve depth so the compose pass can reject an occluded vector.
-    const Id depth = ctx.OpCompositeExtract(f32_type,
-                                            ctx.OpLoad(ctx.F32[4], ctx.frag_coord), 2u);
+    // Depth-exporting fragment shaders replace raster depth. Associate motion
+    // with the same exported value used by the guest depth test, not the
+    // pre-shader FragCoord.z (capture 22: face differed by about 7%).
+    const bool exported_depth = Sirit::ValidId(ctx.frag_depth);
+    const Id depth = exported_depth
+        ? ctx.OpLoad(f32_type, ctx.frag_depth)
+        : ctx.OpCompositeExtract(f32_type, ctx.OpLoad(ctx.F32[4], ctx.frag_coord), 2u);
+#ifdef ISS_ANDROID_BIONIC
+    // Validity magnitude is unchanged. Its sign identifies this depth source
+    // in the on-demand raw capture; compose tests abs(B) at the same threshold.
+    if (exported_depth) valid = ctx.OpFNegate(f32_type, valid);
+#endif
     ctx.OpStore(ctx.motion_frag_out,
                 ctx.OpCompositeConstruct(ctx.F32[4], std::array<Id, 4>{
                     ctx.OpSelect(f32_type, front, dx, zero),

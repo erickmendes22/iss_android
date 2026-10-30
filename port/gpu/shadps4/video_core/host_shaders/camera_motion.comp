@@ -13,7 +13,8 @@ layout(binding = 2, std430) readonly buffer PrevFrame { uint prev_frame[]; };
 layout(binding = 3, std430) writeonly buffer NextFrame { uint next_frame[]; };
 #else
 layout(binding = 1, rg16f) uniform writeonly image2D motion_img; // pixels, previous - current
-// Object motion from the G-buffer: rg pixels, b = valid, a = written depth.
+// Object motion: rg pixels, abs(b) = validity, a = written depth.
+// ISS diagnostic sign: negative b identifies a shader-exported depth value.
 layout(binding = 2) uniform texture2D object_tex;
 #endif
 
@@ -100,7 +101,7 @@ void main() {
             // vector: discard it and use the depth-reprojected camera result.
             const vec2 disagreement = abs(candidate - result);
             const vec2 max_difference = max(vec2(4.0), size * 0.0125);
-            if (object_motion.b > 0.99 &&
+            if (abs(object_motion.b) > 0.99 &&
                 abs(object_motion.a - depth) < threshold &&
                 !any(isnan(candidate)) && !any(isinf(candidate)) &&
                 all(lessThan(disagreement, max_difference))) {
@@ -118,7 +119,7 @@ void main() {
         const float depth_threshold = max(2e-7, depth * 0.005);
         const vec2 max_difference = max(vec2(4.0), size * 0.0125);
         vec2 result = vec2(0.0);
-        if (object_motion.b > 0.99 &&
+        if (abs(object_motion.b) > 0.99 &&
             abs(object_motion.a - depth) < depth_threshold &&
             !any(isnan(object_motion.rg)) && !any(isinf(object_motion.rg)) &&
             all(lessThan(abs(object_motion.rg), max_difference))) {
@@ -185,7 +186,7 @@ void main() {
         // Both depths are full precision. Do not accept an old foreground vector merely
         // because perspective depth compresses distant surfaces into a small interval.
         float depth_threshold = max(2e-7, (proj.z - depth) * 0.01);
-        if (object_motion.b > 0.99 && abs(object_motion.a - depth) < depth_threshold &&
+        if (abs(object_motion.b) > 0.99 && abs(object_motion.a - depth) < depth_threshold &&
             !any(isnan(object_motion.rg)) &&
             !any(isinf(object_motion.rg))) {
             result = object_motion.rg;
