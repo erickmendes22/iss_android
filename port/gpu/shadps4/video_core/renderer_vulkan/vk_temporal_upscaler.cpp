@@ -2564,7 +2564,15 @@ void TemporalUpscaler::RunScaled() {
     info.viewSpaceToMeters = 1.0f;
     info.sharpness = std::min(settings.sharpness.load(), 1.0f);
     info.enableSharpening = settings.sharpen ? VK_TRUE : VK_FALSE;
+#ifdef ISS_ANDROID_BIONIC
+    // Retaining the original source must not reuse history through an invalid
+    // native camera pair. Object-only fallback has zero vectors on uncovered
+    // scenery; it cannot compensate a moving camera (capture 19).
+    info.reset = IssFsrInput::ResetHistory(reset, camera_motion.IssNativeCameraReady())
+        ? VK_TRUE : VK_FALSE;
+#else
     info.reset = reset ? VK_TRUE : VK_FALSE;
+#endif
     info.frameId = frame_id++;
 
     FfxVkPortableUpscaleCreateInfo create_info{};

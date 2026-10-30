@@ -42,9 +42,13 @@ of camera readiness. Then refresh the native camera before testing Ready. If
 it is still invalid, defer to the existing fallback with the verified source
 retained. Unknown addresses and inappropriate formats/extents remain rejected;
 the normal frame boundary continues clearing all AA input state. No stale
-camera matrices are accepted, and no reset safeguard is removed.
+camera matrices are accepted, and no reset safeguard is removed. If the native
+camera pair remains invalid at dispatch, explicitly reset the SDK history:
+object-only vectors leave uncovered static scenery at zero velocity and cannot
+authorize reprojection during camera movement. Keeping the original source
+must not incidentally remove the reset that its previous source switch caused.
 
-The native-camera/motion policy, shared-mesh identity safeguard, outlier guard,
+The native-camera validation, shared-mesh identity safeguard, outlier guard,
 jitter, resolution, readback, SDK/RCAS settings and package identity are unchanged.
 
 ## Validation and limits
@@ -53,6 +57,8 @@ The regression test compiles the actual production marker method against fake
 camera/cache boundaries. It exercises delayed readiness, recovery on latch,
 stale Ready becoming invalid, unknown source/target and mismatched dimensions.
 The old early return fails the delayed-readiness and recovery cases.
+The production history policy is also compiled and tested for all combinations
+of requested reset and native camera readiness.
 
 This removes a demonstrated cause of source switching and history restarts.
 It does not establish the reason every native camera sample is rejected, nor

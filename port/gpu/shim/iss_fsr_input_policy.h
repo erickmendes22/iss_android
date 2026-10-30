@@ -6,6 +6,11 @@ struct Image {
     bool available{}, sampled{};
     std::uint32_t format{}, width{}, height{};
 };
+// Object-only fallback can leave static scenery at zero velocity while the
+// camera moves. A stable source must not accidentally authorize that history.
+inline bool ResetHistory(bool requested, bool native_camera_ready) {
+    return requested || !native_camera_ready;
+}
 // Only the exact scene input identified by the current frame's AA marker is
 // eligible. Different formats/extents (including HDR/G-buffer images) fall back.
 inline bool UseOriginal(bool scaled_session, bool fsr3, bool enabled,

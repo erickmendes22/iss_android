@@ -8,6 +8,11 @@ class InputPolicy(unittest.TestCase):
 #include "iss_fsr_input_policy.h"
 int main(){
  using namespace IssFsrInput;const Image good{true,true,37,640,360};
+ // Even unchanged original input cannot reuse history without camera vectors.
+ assert(ResetHistory(false,false));
+ assert(ResetHistory(true,false));
+ assert(ResetHistory(true,true));
+ assert(!ResetHistory(false,true));
  assert(UseOriginal(true,true,true,good,good,37));
  assert(!UseOriginal(false,true,true,good,good,37));
  assert(!UseOriginal(true,false,true,good,good,37));
@@ -32,6 +37,7 @@ int main(){
   self.assertIn('color_usage = original.usage_flags;',block)
   self.assertIn('original_aa_input != iss_fsr_used_original_aa',block)
   self.assertIn('reset = true;',block)
+  self.assertIn('IssFsrInput::ResetHistory(reset, camera_motion.IssNativeCameraReady())',block)
   self.assertNotIn('ldr_target = iss_aa_prefilter',code)
   self.assertIn('ui_color = ldr_target;',block)
   self.assertIn('camera_motion.RecordMotion(cmdbuf, depth_view, *motion_view, w, h);',block)
