@@ -153,7 +153,7 @@ public final class BionicMainActivity extends Activity {
                 "fsr_accumulation: R8 history weight. fsr_reactivity: RGBA8 (reactive, disocclusion, shading change, accumulation).\n"+
                 "fsr_info: effective SDK frame index, reset, jitter and scales.\n"+
                 "motion: RG16 float pixels (previous-current).\n"+
-                "object_motion: raw RGBA32F before composition; RG=previous-current pixels, abs(B)>0.99=history valid, B<0=shader-exported depth, A=written depth. aa_info declares availability.\n"+
+                "object_motion: raw RGBA32F before composition; RG=previous-current pixels, B=history valid, A=written depth. aa_info declares availability.\n"+
                 "depth: float32 depth, reversed-Z.\n"+
                 "f000/f001 = successive frames; output includes SDK sharpening.\n").getBytes("UTF-8"));
      zip.closeEntry();
