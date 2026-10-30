@@ -39,8 +39,11 @@ mix differently filtered and potentially HUD-bearing inputs.
 
 Validate the marker target and save its current-frame AA input independently
 of camera readiness. Then refresh the native camera before testing Ready. If
-it is still invalid, defer to the existing fallback with the verified source
-retained. Unknown addresses and inappropriate formats/extents remain rejected;
+it is still invalid but the existing object-only fallback is available, dispatch
+at the AA marker with history reset, before HUD draws. Delaying that dispatch
+would also cross the scene/UI boundary. If neither camera nor object motion is
+available, retain the verified source and defer to the existing display path.
+Unknown addresses and inappropriate formats/extents remain rejected;
 the normal frame boundary continues clearing all AA input state. No stale
 camera matrices are accepted, and no reset safeguard is removed. If the native
 camera pair remains invalid at dispatch, explicitly reset the SDK history:
@@ -56,6 +59,7 @@ jitter, resolution, readback, SDK/RCAS settings and package identity are unchang
 The regression test compiles the actual production marker method against fake
 camera/cache boundaries. It exercises delayed readiness, recovery on latch,
 stale Ready becoming invalid, unknown source/target and mismatched dimensions.
+It also verifies that object-only fallback enters UI composition at the marker.
 The old early return fails the delayed-readiness and recovery cases.
 The production history policy is also compiled and tested for all combinations
 of requested reset and native camera readiness.

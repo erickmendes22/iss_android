@@ -2172,10 +2172,11 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
     ldr_target = image_id;
     // Ready() can describe the preceding boundary until the completed native
     // sample is latched. Refresh it here, before deciding whether this marker
-    // can dispatch. If it is still unavailable, leave the verified source for
-    // the existing display fallback; do not invent or reuse a camera matrix.
+    // can dispatch. The existing object-only fallback can also run here, before
+    // HUD draws, with SDK history explicitly reset below. Deferring it to the
+    // display boundary would consume a guest target already containing HUD.
     camera_motion.PrepareIssNativeCamera();
-    if (!camera_motion.Ready()) return;
+    if (!camera_motion.Ready() && !camera_motion.IssObjectMotionReady(width, height)) return;
     RunScaled();
     if (ui_phase && ++used <= 4) {
         std::printf("FSR3 ISS AA marker: reconstructed at AA boundary, GPU=0x%llx, size=%ux%u\\n",

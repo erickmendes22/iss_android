@@ -39,8 +39,9 @@ struct Cache {
  Image& GetImage(int id){return images[id];}
 };
 struct Camera {
- bool ready=false, ready_after_latch=false; int depth=3,latched=0;
+ bool ready=false, ready_after_latch=false, object_ready=false; int depth=3,latched=0;
  bool Ready(){return ready;} int Depth(){return depth;}
+ bool IssObjectMotionReady(u32 w,u32 h){return depth && object_ready && w==640 && h==360;}
  void PrepareIssNativeCamera(){++latched;ready=ready_after_latch;}
 };
 struct Encoding {int bytes;};
@@ -53,7 +54,7 @@ public:
  struct {u64 address=0;u32 format=0,width=0,height=0;} iss_aa_capture;
  Camera camera_motion; Cache texture_cache;
  bool Scaled(){return true;} bool Active(){return true;}
- void RunScaled(){assert(camera_motion.Ready());++dispatches;ui_phase=true;}
+ void RunScaled(){assert(camera_motion.Ready() || camera_motion.IssObjectMotionReady(640,360));++dispatches;ui_phase=true;}
  void OnIssAaOutputMarker(u64,u32,u32,u64);
 };
 '''
@@ -73,6 +74,10 @@ int main(){
  TemporalUpscaler stale;stale.camera_motion.ready=true;
  stale.OnIssAaOutputMarker(0x100,640,360,0x200);
  assert(stale.dispatches==0 && stale.iss_aa_prefilter==2);
+ // Existing object-only fallback must run before HUD, not at display time.
+ TemporalUpscaler objects;objects.camera_motion.object_ready=true;
+ objects.OnIssAaOutputMarker(0x100,640,360,0x200);
+ assert(objects.dispatches==1 && objects.iss_aa_prefilter==2 && objects.ui_phase);
  // Unknown input must not borrow a previous address; invalid target stays inert.
  recovered.done_this_frame=false;
  recovered.OnIssAaOutputMarker(0x100,640,360,0x999);
