@@ -60,6 +60,25 @@ public class CaptureExportTest {
   int sdkCount=0;
   try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(sdkBytes.toByteArray()))){for(ZipEntry e;(e=z.getNextEntry())!=null;){if(e.getName().contains("_fsr_"))sdkCount++;z.closeEntry();}}
   assert sdkCount==10;
+  // Raw object vectors must arrive intact before export advertises this stage.
+  for(int f=0;f<2;f++){
+   String p=String.format("f%03d_",f);
+   Files.write(new File(dir,p+"aa_info.txt").toPath(),("pre_fxaa_available=1\nfsr_input=pre_fxaa_original\nobject_motion_available=1\n").getBytes("UTF-8"));
+  }
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f000_object_motion_2x2_rgba32f.raw",63);
+  file(dir,"f001_object_motion_2x2_rgba.raw",16);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f000_object_motion_2x2_rgba32f.raw",64);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f001_object_motion_2x2_rgba32f.raw",64);
+  File[] objects=FsrCaptureFiles.select(dir);
+  assert objects.length==26&&FsrCaptureFiles.complete(objects);
+  ByteArrayOutputStream objectBytes=new ByteArrayOutputStream();
+  try(ZipOutputStream z=new ZipOutputStream(objectBytes)){for(File f:objects){z.putNextEntry(new ZipEntry(f.getName()));Files.copy(f.toPath(),z);z.closeEntry();}}
+  int objectCount=0;
+  try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(objectBytes.toByteArray()))){for(ZipEntry e;(e=z.getNextEntry())!=null;){if(e.getName().contains("_object_motion_")){assert e.getName().endsWith("_rgba32f.raw");assert z.readAllBytes().length==64;objectCount++;}z.closeEntry();}}
+  assert objectCount==2;
   System.out.println("PASS: AA and all SDK stages survive ZIP; partial and wrongly encoded SDK stages rejected");
  }
 }
@@ -80,4 +99,13 @@ public class CaptureExportTest {
   self.assertLess(block.index('runtime.FlushBarriers()'),block.index('"aa_before_fxaa"'))
   self.assertNotIn('ldr_target = iss_aa_prefilter',code)
   self.assertIn('ldr_target = image_id;',code)
+ def test_raw_object_capture_is_bounded_and_only_on_request(self):
+  code=(ROOT/'port/gpu/shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp').read_text()
+  block=code[code.index('void TemporalUpscaler::RunScaled()'):code.index('vk::ImageView TemporalUpscaler::Mirror')]
+  at=block.index('if (const int dump = DumpFrame(); dump >= 0)')
+  self.assertNotIn('"object_motion", "rgba32f"',block[:at])
+  self.assertIn('u64(w) * h * 16 <= 20000000',block[at:])
+  self.assertIn('camera_motion.ObjectMotionImage(w, h)',block[at:])
+  self.assertIn('{object_image, w, h, 16, "object_motion", "rgba32f"}',block[at:])
+  self.assertIn('bool(object_image)',block[at:])
 if __name__=='__main__':unittest.main()

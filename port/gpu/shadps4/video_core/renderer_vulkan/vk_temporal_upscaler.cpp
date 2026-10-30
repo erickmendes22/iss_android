@@ -91,15 +91,17 @@ AaDumpEncoding AaEncoding(vk::Format format) {
     }
 }
 void DumpAaInfo(int frame, bool available, bool original_input, u64 address, u32 format, u32 width, u32 height,
-                u32 crop_width, u32 crop_height, float jitter_x, float jitter_y) {
+                u32 crop_width, u32 crop_height, float jitter_x, float jitter_y,
+                bool object_motion_available) {
     const char* dir=std::getenv("TLG_DUMP_DIR");
     char path[512];std::snprintf(path,sizeof(path),"%s/f%03d_aa_info.txt",dir&&*dir?dir:"out/dump",frame);
     if(FILE* f=std::fopen(path,"wb")) {
         std::fprintf(f,"pre_fxaa_available=%u\npre_fxaa_gpu_address=0x%llx\npre_fxaa_vulkan_format=%u\n"
                        "pre_fxaa_extent=%ux%u\ncaptured_extent=%ux%u\nfsr_input=%s\n"
-                       "jitter_render_pixels=%.9g,%.9g\n",
+                       "jitter_render_pixels=%.9g,%.9g\nobject_motion_available=%u\n",
                      unsigned(available),(unsigned long long)address,format,width,height,
-                     crop_width,crop_height,original_input?"pre_fxaa_original":"post_fxaa_composite",jitter_x,jitter_y);
+                     crop_width,crop_height,original_input?"pre_fxaa_original":"post_fxaa_composite",jitter_x,jitter_y,
+                     unsigned(object_motion_available));
         std::fclose(f);
     }
 }
@@ -2625,6 +2627,17 @@ void TemporalUpscaler::RunScaled() {
         // the images consumed by the SDK, so loss of detail can be located
         // before vs. during temporal reconstruction. No GPU readback otherwise.
         if (const int dump = DumpFrame(); dump >= 0) {
+            // RecordMotion already called ObjectMotion::PrepareRead: this image
+            // is General. Keep RG/valid/depth unchanged to distinguish missing
+            // facial history from a vector rejected by the depth/outlier guard.
+            // Same 20 MB per-file limit as the Android exporter; no copy outside
+            // this user-requested capture and no additional image allocation.
+            const auto object_image = u64(w) * h * 16 <= 20000000
+                ? camera_motion.ObjectMotionImage(w, h) : vk::Image{};
+            if (object_image) {
+                DumpImages(instance, scheduler, cmdbuf, dump,
+                           {{object_image, w, h, 16, "object_motion", "rgba32f"}});
+            }
             DumpFsrHistory(instance,scheduler,cmdbuf,context,dump,info);
             DumpImages(instance, scheduler, cmdbuf, dump,
                        {{color_image, source_width, source_height, 4, "input", "rgba"},
@@ -2635,7 +2648,7 @@ void TemporalUpscaler::RunScaled() {
                          vk::ImageAspectFlagBits::eDepth}});
             DumpAaInfo(dump, bool(iss_aa_prefilter), original_aa_input, iss_aa_capture.address,
                        iss_aa_capture.format, iss_aa_capture.width, iss_aa_capture.height,
-                       w, h, info.jitterOffset.x, info.jitterOffset.y);
+                       w, h, info.jitterOffset.x, info.jitterOffset.y, bool(object_image));
             // Preserve the filtered output as a separate diagnostic stage now
             // that the SDK input may be the original scene.
             runtime.Transit(&color, vk::ImageLayout::eGeneral,
