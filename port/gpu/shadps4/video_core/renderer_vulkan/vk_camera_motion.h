@@ -33,6 +33,7 @@ public:
         current.valid = previous.valid = false;
 #ifdef ISS_ANDROID_BIONIC
         native_previous_valid = native_motion_valid = false;
+        native_frame_prepared = false;
 #endif
     }
     void SetObjectMotion(ObjectMotion* motion) noexcept {
@@ -162,11 +163,20 @@ private:
     u64 native_previous_sequence = 0;
     bool native_previous_valid = false;
     bool native_motion_valid = false;
+    bool native_frame_prepared = false;
     float native_near = 10.0f;
     float native_far = 10000000.0f;
     float native_vertical_fov = 1.0f;
     u32 native_frames_valid = 0;
     u32 native_frames_rejected = 0;
+    u32 native_frames_repeated = 0;
+    u32 native_reject_missing = 0;
+    u32 native_reject_matrix = 0;
+    u32 native_reject_jitter = 0;
+    u32 native_reject_seed = 0;
+    u32 native_reject_switch = 0;
+    u32 native_reject_gap = 0;
+    u32 native_reject_transform = 0;
     struct BindingSample {
         u64 shader_hash = 0;
         u32 slot = 0;

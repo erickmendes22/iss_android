@@ -190,10 +190,39 @@ void CameraMotion::PrepareIssNativeCamera() {
     // The fullscreen upscale consumes this game's native scene depth.
     // Read the latest completed camera update immediately before that pass,
     // not at OnDisplayPass (which runs after the upscale).
-    if (!for_upscaler || !depth_id) return;
+    // The AA marker and RunScaled both prepare the camera. A newer CPU update
+    // between those calls must not replace the camera pair within one GPU frame.
+    if (!for_upscaler || !depth_id || native_frame_prepared) return;
+    native_frame_prepared = true;
     TlgIssCameraSnapshot sample{};
     const u64 sequence = tlggpu_iss_camera_read(&sample);
-    if (!sequence || sequence == native_previous_sequence) return;
+    if (!sequence) {
+        native_previous_valid = native_motion_valid = false;
+        current.valid = previous.valid = false;
+        ++native_frames_rejected;
+        ++native_reject_missing;
+        return;
+    }
+    if (sequence == native_previous_sequence) {
+        // Same validated guest camera in a NEW rendered frame: the camera did
+        // not move. Do not replay the preceding frame's transform or let the
+        // display boundary discard this anchor. Never revive an invalidated
+        // pair after a menu/settings change with an old sample.
+        if (native_previous_valid) {
+            native_reprojection = {};
+            for (int i = 0; i < 16; i += 5) native_reprojection[i] = 1.0f;
+            native_jitter_delta_ndc = {};
+            native_motion_valid = current.valid = previous.valid = true;
+            frame_has_camera = true;
+            ++native_frames_valid;
+            ++native_frames_repeated;
+        } else {
+            native_motion_valid = current.valid = previous.valid = false;
+            ++native_frames_rejected;
+            ++native_reject_seed;
+        }
+        return;
+    }
     const bool scalars_ok =
         std::isfinite(sample.near_plane) && sample.near_plane > 0.0f &&
         std::isfinite(sample.far_plane) && sample.far_plane > sample.near_plane &&
@@ -228,6 +257,7 @@ void CameraMotion::PrepareIssNativeCamera() {
         native_previous_valid = native_motion_valid = false;
         current.valid = previous.valid = false;
         ++native_frames_rejected;
+        ++native_reject_matrix;
         return;
     }
 
@@ -246,6 +276,7 @@ void CameraMotion::PrepareIssNativeCamera() {
         native_previous_valid = native_motion_valid = false;
         current.valid = previous.valid = false;
         ++native_frames_rejected;
+        ++native_reject_jitter;
         return;
     }
     native_jitter_delta_ndc = native_previous_valid
@@ -262,6 +293,9 @@ void CameraMotion::PrepareIssNativeCamera() {
                              sequence > native_previous_sequence &&
                              sequence - native_previous_sequence <= 64;
     native_motion_valid = same_camera && consecutive;
+    if (!native_previous_valid) ++native_reject_seed;
+    else if (!same_camera) ++native_reject_switch;
+    else if (!consecutive) ++native_reject_gap;
     if (native_motion_valid) {
         // PS4/inFAMOUS stores row-vector camera matrices. For a homogeneous
         // CURRENT clip-space row vector, the PREVIOUS clip coordinate is:
@@ -285,6 +319,7 @@ void CameraMotion::PrepareIssNativeCamera() {
                 }
                 if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
                     native_motion_valid = false;
+                    ++native_reject_transform;
                     break;
                 }
                 native_reprojection[row * 4 + col] = float(value);
@@ -498,10 +533,17 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         static_cast<unsigned long long>(android_camera_last_sequence),
                         android_camera_log_count);
             std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
-                        "current_native=%u\n",
+                        "current_native=%u repeated=%u missing=%u matrix=%u jitter=%u "
+                        "seed=%u camera_switch=%u sequence_gap=%u transform=%u\n",
                         native_frames_valid, native_frames_rejected,
-                        unsigned(native_motion_valid));
+                        unsigned(native_motion_valid), native_frames_repeated,
+                        native_reject_missing, native_reject_matrix, native_reject_jitter,
+                        native_reject_seed, native_reject_switch, native_reject_gap,
+                        native_reject_transform);
             native_frames_valid = native_frames_rejected = 0;
+            native_frames_repeated = native_reject_missing = native_reject_matrix = 0;
+            native_reject_jitter = native_reject_seed = native_reject_switch = 0;
+            native_reject_gap = native_reject_transform = 0;
             android_camera_frame_updates = 0;
         }
 
@@ -555,6 +597,9 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     if (!frame_has_camera) InvalidateHistory();
     frame_has_camera = false;
     depth_id = {};
+#ifdef ISS_ANDROID_BIONIC
+    native_frame_prepared = false;
+#endif
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {
