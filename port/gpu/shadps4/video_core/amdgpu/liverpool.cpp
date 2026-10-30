@@ -816,8 +816,19 @@ void ScanDcb(std::span<const u32> dcb, int depth) {
 } // namespace
 
 Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb,
-                                           u64 seq) {
+                                           u64 seq
+#ifdef ISS_ANDROID_BIONIC
+                                           , std::optional<TlgIssCameraSnapshot> iss_camera
+#endif
+) {
     FIBER_ENTER(dcb_task_name);
+#ifdef ISS_ANDROID_BIONIC
+    // The coroutine owns this submission-time copy, even when guest CPU work
+    // has advanced before its first resume. Nested IBs inherit the outer copy.
+    if (iss_camera && rasterizer) {
+        rasterizer->SetIssSubmissionCamera(*iss_camera);
+    }
+#endif
     // Top-level buffers enqueued for the draw preparation workers (nested IBs are not).
     Vulkan::DrawPreparation* draw_prep =
         seq != NoSeq && rasterizer ? &rasterizer->GetDrawPreparation() : nullptr;
@@ -1917,6 +1928,12 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
 
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
+#ifdef ISS_ANDROID_BIONIC
+    // Never select the CPU's live camera later, when these commands execute.
+    // Snapshot before preparation workers can delay queueing the submission.
+    TlgIssCameraSnapshot iss_camera{};
+    tlggpu_iss_camera_read(&iss_camera);
+#endif
 
     if (EmulatorSettings.IsCopyGpuBuffers()) {
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
@@ -1934,7 +1951,11 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
             seq = gfx_submit_seq++;
             draw_prep->Enqueue(seq, std::move(prep_submission));
         }
-        auto task = ProcessGraphics(dcb, ccb, seq);
+        auto task = ProcessGraphics(dcb, ccb, seq
+#ifdef ISS_ANDROID_BIONIC
+                                    , iss_camera
+#endif
+        );
         queue.submits.emplace(task.handle);
     }
 

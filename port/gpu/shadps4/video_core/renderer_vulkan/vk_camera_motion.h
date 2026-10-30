@@ -7,6 +7,9 @@
 
 #include <array>
 #include <vector>
+#ifdef ISS_ANDROID_BIONIC
+#include "../../../tlggpu.h"
+#endif
 
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
@@ -62,8 +65,13 @@ public:
     [[nodiscard]] bool IssObjectMotionReady(u32 width, u32 height) const noexcept {
         return depth_id && bool(ObjectMotionImage(width, height));
     }
-    // Latch the completed game-camera matrix and the preceding scene-frame
-    // matrix BEFORE the display pass starts the temporal upscale.
+    // Called in graphics-stream order, including the optional recording thread.
+    // Do not reset a pair already latched for this frame when another command
+    // buffer from the same frame arrives.
+    void SetIssSubmissionCamera(const TlgIssCameraSnapshot& sample) noexcept {
+        native_submission_camera = sample;
+    }
+    // Latch the submission's camera and the preceding scene-frame matrix.
     void PrepareIssNativeCamera();
     [[nodiscard]] bool IssNativeCameraReady() const noexcept {
         return native_motion_valid && Ready();
@@ -154,6 +162,7 @@ private:
     // Native inFAMOUS camera matrices are x86 row-major 4x4 float matrices,
     // copied from the verified guest update; no guest pointers retained.
     std::array<float, 16> native_previous_composite{};
+    TlgIssCameraSnapshot native_submission_camera{};
     std::array<float, 16> native_reprojection{};
     // Game-native projection's subpixel NDC shift (row-vector, row 2).
     // The guest's built-in jitter must not appear as camera-object motion.

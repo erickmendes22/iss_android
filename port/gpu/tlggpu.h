@@ -79,8 +79,9 @@ void tlggpu_set_wait_hooks(TlgGpuWaitBegin begin, TlgGpuWaitEnd end);
 typedef struct { uint64_t submitted, shown, presented, vblanks, faults_in_progress, faults_handled; } TlgGpuFrameCounters;
 void tlggpu_frame_counters(TlgGpuFrameCounters *out);
 /* Camera fields captured at a verified inFAMOUS x86-64 camera-update site.
- * Snapshot data is copied by the FEX hook before the game resumes, and kept
- * separate from the FSR dispatch until matrix convention/frame identity are verified. */
+ * The FEX hook copies these values before the game resumes. Graphics submission
+ * copies them again into its owned command context; FSR never reads the live
+ * CPU publisher while executing older commands. */
 typedef struct {
     uint64_t sequence;
     uint64_t guest_object;
@@ -93,7 +94,8 @@ typedef struct {
 } TlgIssCameraSnapshot;
 /* Called from guest CPU only; does not retain any guest pointer. */
 void tlggpu_iss_camera_publish(const TlgIssCameraSnapshot *sample);
-/* Called from the GPU frame boundary. Returns sequence (>0), or 0 if absent. */
+/* Read at graphics submission, before asynchronous execution. Returns sequence
+ * (>0), or 0 if absent. The caller must retain its own value, not guest pointers. */
 uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot *sample);
 /* The game opened a file (guest path): feeds the region trace (TLG_REGION_TRACE=1, gpu/shim/tlg_region.h). */
 void tlggpu_note_open(const char *guest_path);

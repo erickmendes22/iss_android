@@ -188,14 +188,14 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
 #ifdef ISS_ANDROID_BIONIC
 void CameraMotion::PrepareIssNativeCamera() {
     // The fullscreen upscale consumes this game's native scene depth.
-    // Read the latest completed camera update immediately before that pass,
-    // not at OnDisplayPass (which runs after the upscale).
+    // Use the camera copied with these submitted commands. Reading the live
+    // CPU publisher here can select an update from a later queued frame.
     // The AA marker and RunScaled both prepare the camera. A newer CPU update
     // between those calls must not replace the camera pair within one GPU frame.
     if (!for_upscaler || !depth_id || native_frame_prepared) return;
     native_frame_prepared = true;
-    TlgIssCameraSnapshot sample{};
-    const u64 sequence = tlggpu_iss_camera_read(&sample);
+    const TlgIssCameraSnapshot sample = native_submission_camera;
+    const u64 sequence = sample.sequence;
     if (!sequence) {
         native_previous_valid = native_motion_valid = false;
         current.valid = previous.valid = false;
@@ -482,12 +482,9 @@ void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
 #ifdef ISS_ANDROID_BIONIC
     if (for_upscaler) {
-        // Read exactly one completed guest camera sample at this frame boundary,
-        // after G-buffer draws but before depth_id is reset. We intentionally
-        // do NOT feed these raw matrices into the FSR motion shader: which camera
-        // owns the drawn depth, matrix order and jitter must first be verified.
-        TlgIssCameraSnapshot sample{};
-        const u64 sequence = tlggpu_iss_camera_read(&sample);
+        // Report the ordered submission snapshot, not a newer CPU publication.
+        const TlgIssCameraSnapshot sample = native_submission_camera;
+        const u64 sequence = sample.sequence;
         if (sequence && sequence != android_camera_last_sequence) {
             const u64 update_delta = sequence - android_camera_last_sequence;
             android_camera_last_sequence = sequence;
