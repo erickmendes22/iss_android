@@ -37,6 +37,8 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_occlusion.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_fast_pipeline_memo.h"
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_threads.h"
@@ -47,6 +49,31 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
+
+namespace {
+// Bind the previous graphics pipeline only if the command buffer and the full
+// recording-state epoch match. All normal DrawRecord/DrawIndirectRecord paths
+// continue to resolve vertex buffers, resources, barriers and push constants.
+void FastBindGraphicsPipeline(vk::CommandBuffer cmdbuf, vk::Pipeline pipeline,
+                              u64 tick, u64 epoch) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* flag = std::getenv("ISS_FAST_PIPELINE_BIND");
+        return !flag || flag[0] != '0';
+    }();
+    if (enabled) {
+        static thread_local FastGraphicsPipelineMemo<vk::CommandBuffer, vk::Pipeline> cache;
+        if (!cache.NeedsBind(cmdbuf, pipeline, tick, epoch)) {
+            if (IssBionicPerf::Enabled()) {
+                IssBionicPerf::fast_pipeline_bind_skipped.fetch_add(1, std::memory_order_relaxed);
+            }
+            return;
+        }
+    }
+#endif
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+}
+} // namespace
 
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
@@ -1338,6 +1365,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 num_instances = regs.num_instances.NumInstances();
     const u32 first_vertex = vertex_offset;
     const u32 first_instance = instance_offset;
+    const u64 fast_bind_tick = scheduler.CurrentTick();
+    const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         const auto draw = [&] {
             if (is_indexed) {
@@ -1347,10 +1376,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                 cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
             }
         };
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        FastBindGraphicsPipeline(cmdbuf, handle, fast_bind_tick, fast_bind_epoch);
         draw();
         if (square) [[unlikely]] {
-            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, square);
+            FastBindGraphicsPipeline(cmdbuf, square, fast_bind_tick, fast_bind_epoch);
             draw();
         }
     });
@@ -1542,12 +1571,14 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 args_offset = base;
     const vk::Buffer counts = count_address != 0 ? count_buffer->Handle() : vk::Buffer{};
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
+    const u64 fast_bind_tick = scheduler.CurrentTick();
+    const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         for (const vk::Pipeline bound : {handle, square}) {
             if (!bound) {
                 break;
             }
-            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, bound);
+            FastBindGraphicsPipeline(cmdbuf, bound, fast_bind_tick, fast_bind_epoch);
             if (is_indexed) {
                 if (counts) {
                     cmdbuf.drawIndexedIndirectCount(args, args_offset, counts, counts_offset, max_count,
