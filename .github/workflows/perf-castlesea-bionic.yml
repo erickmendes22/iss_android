@@ -101,7 +101,7 @@ jobs:
 
   signed-perf-apk:
     if: github.event_name == 'pull_request'
-    needs: [source-and-memo, cross-compile-bionic-gpu]
+    needs: [source-and-memo]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
