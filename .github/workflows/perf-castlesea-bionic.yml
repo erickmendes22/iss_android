@@ -1,0 +1,31 @@
+name: ISS Bionic - guarded performance paths
+on:
+  push:
+    branches: [perf/castlesea-stage-bind-fastpath-bionic]
+  pull_request:
+    branches: [experimental-bionic]
+permissions:
+  contents: read
+jobs:
+  source-and-memo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact descriptor replay and partial update tests
+        run: python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_descriptor_replay.py' -v
+      - name: Native secondary command-state ordering tests
+        run: |
+          python3 -m unittest discover -s tools/android/runtime -p 'test_native_pass_graphics_state.py' -v
+          python3 -m unittest discover -s tools/android/runtime -p 'test_native_pass_secondary.py' -v
+      - name: Parse Android performance settings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java').read_text()
+          assert 'env.put("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES","0");' in s
+          assert 'env.put("TLG_DESCRIPTOR_REPLAY"' in s
+          assert 'env.put("TLG_DESCRIPTOR_DELTA"' in s
+          assert 'renderer_native_secondary_depth' in s
+          print('Android feature flags and color-pass safeguard verified')
+          PY
