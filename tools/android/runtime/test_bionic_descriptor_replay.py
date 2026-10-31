@@ -45,6 +45,28 @@ int main() {
     if (!yes(2, 6, 12, 2, 1, two)) return 12;
     const std::array<std::uint64_t, 0> empty{};
     if (!yes(2, 6, 12, 2, 1, empty)) return 13; // fail closed
+
+    // Four bindings; only the second changes. A complete template update is
+    // unnecessary, but an incomplete signature/epoch can never select partial.
+    using Cache = Vulkan::DescriptorReplayMemo<std::uint64_t, std::uint64_t>;
+    Cache delta;
+    const std::array<Cache::ByteRange, 4> bindings{{{0, 8}, {8, 8}, {16, 8}, {24, 8}}};
+    std::array<std::uint8_t, 4> selected{};
+    const std::array<std::uint64_t, 4> first{1, 2, 3, 4};
+    const std::array<std::uint64_t, 4> second{1, 22, 3, 4};
+    const std::array<std::uint64_t, 4> changed_all{10, 20, 30, 40};
+    auto plan = [&](auto cb, auto layout, auto epoch, const auto& payload) {
+        return delta.Select(cb, layout, 100, epoch, 0, std::span(payload),
+                            std::span(bindings), std::span(selected));
+    };
+    if (plan(1, 2, 1, first).mode != Cache::Mode::Full) return 14;
+    if (plan(1, 2, 1, first).mode != Cache::Mode::Unchanged) return 15;
+    auto partial = plan(1, 2, 1, second);
+    if (partial.mode != Cache::Mode::Partial || partial.changed != 1 || selected[0] != 1) return 16;
+    if (plan(1, 2, 1, changed_all).mode != Cache::Mode::Full) return 17;
+    if (plan(1, 2, 2, second).mode != Cache::Mode::Full) return 18;
+    if (plan(1, 3, 2, second).mode != Cache::Mode::Full) return 19;
+    if (plan(2, 3, 2, second).mode != Cache::Mode::Full) return 20;
     return 0;
 }
 """
@@ -66,6 +88,10 @@ int main() {
         self.assertIn("DescriptorReplayMemo<vk::CommandBuffer, vk::PipelineLayout>", resources)
         self.assertIn("ReplayMemo().Invalidate", resources)
         self.assertIn("TLG_DESCRIPTOR_REPLAY", resources)
+        self.assertIn("TLG_DESCRIPTOR_DELTA", resources)
+        self.assertIn("cmdbuf.pushDescriptorSetKHR(", resources)
+        self.assertIn("descriptor_delta_partial.fetch_add(", resources)
+        self.assertIn("ReplayMemo().Invalidate", resources)
 
 
 if __name__ == "__main__":
