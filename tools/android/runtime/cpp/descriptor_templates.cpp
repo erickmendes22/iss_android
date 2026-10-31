@@ -11,12 +11,14 @@
 #include <vector>
 #include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/renderer_vulkan/descriptor_template_data.h"
+#include "video_core/renderer_vulkan/vk_descriptor_replay_memo.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 using u32=uint32_t;using u64=uint64_t;
 namespace boost::container {template<class T,size_t N> using small_vector=std::vector<T>;}
 namespace Shader {struct PushData {std::array<u32,32> words{};};}
 namespace IssBionicPerf {
 std::atomic<u64> descriptor_template_calls{},descriptor_template_bytes{},descriptor_legacy_calls{};
+std::atomic<u64> descriptor_delta_partial{}, descriptor_delta_bindings{}, descriptor_replay_skipped{};
 bool Enabled(){return true;}
 }
 #define LOG_WARNING(...) ((void)0)
@@ -81,6 +83,8 @@ struct Scheduler {
     std::vector<std::unique_ptr<std::byte[]>> storage;
     std::vector<std::function<void(vk::CommandBuffer)>> commands;
     bool IsRecordingDeferred()const{return deferred;}
+    u64 CurrentTick()const noexcept{return 7;}
+    u64 DescriptorStreamEpoch()const noexcept{return 11;}
     void ReserveRecordData(size_t){}
     template<class T> std::span<const T> RecordData(std::span<const T> data) {
         if(switch_direct)deferred=false; // ReserveRecordData may switch an oversized chunk to direct
@@ -113,6 +117,7 @@ struct Pipeline {
     void BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBinding>);
     void BindResources(DescriptorWrites&,u32,const Shader::PushData&)const;
 };
+// PRODUCTION_MEMO_HELPERS
 // PRODUCTION_METHODS
 }
 
