@@ -1,107 +1,15 @@
-name: ISS Bionic - guarded performance paths
+name: ISS Bionic - performance APK
 on:
-  push:
-    branches: [perf/castlesea-stage-bind-fastpath-bionic]
   pull_request:
     branches: [experimental-bionic]
 permissions:
   contents: read
+# One run for the PR. A newer commit cancels the older run before starting.
 concurrency:
-  group: iss-perf-${{ github.ref }}
+  group: iss-bionic-perf-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  source-and-memo:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Exact descriptor replay and partial update tests
-        run: python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_descriptor_replay.py' -v
-      - name: Stage memo and Fast Draw pipeline binding tests
-        run: |
-          python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_stage_bind_memo.py' -v
-          python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_fast_pipeline_bind.py' -v
-          python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_fast_draw_key.py' -v
-      - name: Native secondary command-state ordering tests
-        run: |
-          python3 -m unittest discover -s tools/android/runtime -p 'test_native_pass_graphics_state.py' -v
-          python3 -m unittest discover -s tools/android/runtime -p 'test_native_pass_secondary.py' -v
-      - name: Parse Android performance settings
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          s=Path('android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java').read_text()
-          assert 'env.put("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES","0");' in s
-          assert 'env.put("TLG_DESCRIPTOR_REPLAY"' in s
-          assert 'env.put("TLG_DESCRIPTOR_DELTA"' in s
-          assert 'renderer_native_secondary_depth' in s
-          print('Android feature flags and color-pass safeguard verified')
-          PY
-
-  cross-compile-bionic-gpu:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 130
-    env:
-      ISS_JOBS: '2'
-      ISS_RELEASE_BUILD: '1'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
-      - uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-file: ci/environment.yml
-          cache-environment: true
-          init-shell: bash
-      - name: Install host compiler and tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
-            pkg-config patchelf unzip xz-utils zstd bison flex python3-venv
-      - name: Prepare Android NDK and dependencies
-        shell: bash -el {0}
-        run: |
-          echo "ISS_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
-          echo "ISS_BIONIC_HEADERS=$CONDA_PREFIX" >> "$GITHUB_ENV"
-          bash ci/setup-deps.sh "$CONDA_PREFIX"
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            .local-deps/android/bionic-prefix
-            .local-deps/android/bionic-src
-          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
-          restore-keys: |
-            iss-bionic-deps-v2-${{ runner.os }}-
-      - name: Build Bionic dependency prefix
-        shell: bash -el {0}
-        run: bash tools/android/bionic/build_deps.sh
-      - name: Configure and compile actual ARM64 GPU backend
-        shell: bash -el {0}
-        run: |
-          # check_gpu_abi.py requires the probe/HLE objects: build those first.
-          bash tools/android/bionic/build_native_runtime.sh --compile-only
-          bash tools/android/bionic/build_gpu.sh --configure-only
-          bash tools/android/bionic/build_cpu.sh
-          bash tools/android/bionic/build_gpu.sh
-      - name: Upload compiler diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bionic-perf-compile-logs
-          path: |
-            .local-deps/android/bionic-build/**/*.log
-            out/bionic/gpu/CMakeFiles/CMakeConfigureLog.yaml
-          if-no-files-found: ignore
-
-  signed-perf-apk:
-    if: github.event_name == 'pull_request'
-    needs: [source-and-memo]
+  build-and-sign-apk:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
