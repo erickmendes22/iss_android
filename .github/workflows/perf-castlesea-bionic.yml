@@ -29,3 +29,62 @@ jobs:
           assert 'renderer_native_secondary_depth' in s
           print('Android feature flags and color-pass safeguard verified')
           PY
+
+  cross-compile-bionic-gpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      ISS_JOBS: '2'
+      ISS_RELEASE_BUILD: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: ci/environment.yml
+          cache-environment: true
+          init-shell: bash
+      - name: Install host compiler and tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
+            pkg-config patchelf unzip xz-utils zstd bison flex python3-venv
+      - name: Prepare Android NDK and dependencies
+        shell: bash -el {0}
+        run: |
+          echo "ISS_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "ISS_BIONIC_HEADERS=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            .local-deps/android/bionic-prefix
+            .local-deps/android/bionic-src
+          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
+          restore-keys: |
+            iss-bionic-deps-v2-${{ runner.os }}-
+      - name: Build Bionic dependency prefix
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_deps.sh
+      - name: Configure and compile actual ARM64 GPU backend
+        shell: bash -el {0}
+        run: |
+          bash tools/android/bionic/build_gpu.sh --configure-only
+          bash tools/android/bionic/build_cpu.sh
+          bash tools/android/bionic/build_gpu.sh
+      - name: Upload compiler diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bionic-perf-compile-logs
+          path: |
+            .local-deps/android/bionic-build/**/*.log
+            out/bionic/gpu/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
