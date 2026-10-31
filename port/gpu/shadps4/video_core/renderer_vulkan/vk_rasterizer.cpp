@@ -3252,8 +3252,21 @@ u64 Rasterizer::SamplerSetKey(const Shader::Info& stage, const PreparedStage* pr
     // GetSampler's inputs: the S#s, the border color base, the per-sampler depth flags and the
     // LOD bias of this draw.
     const u32 count = static_cast<u32>(stage.samplers.size());
-    u64 key =
-        count ? XXH3_64bits(prepared->sampler_sharps, count * sizeof(AmdGpu::Sampler)) : 0;
+    // Bionic normally disables speculative draw-preparation workers. Hash the live
+    // sampler sharps directly for the same resource-validating memo path in that mode.
+    u64 key = 0;
+    if (count) {
+        if (prepared) {
+            key = XXH3_64bits(prepared->sampler_sharps, count * sizeof(AmdGpu::Sampler));
+        } else {
+            std::array<AmdGpu::Sampler, Shader::NUM_SAMPLERS> current{};
+            if (count > current.size()) return 0;
+            for (u32 i = 0; i < count; ++i) {
+                current[i] = stage.samplers[i].GetSharp(stage);
+            }
+            key = XXH3_64bits(current.data(), count * sizeof(AmdGpu::Sampler));
+        }
+    }
     const u64 border_color_base = Regs().ta_bc_base.base_addr;
     key = HashCombine(key, border_color_base);
     key = HashCombine(key, u64(std::bit_cast<u32>(sampler_lod_bias)));
@@ -3275,7 +3288,7 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
     // memo when a sampler was destroyed (its LRU ids may be gone or reused).
     bool memo = false;
     bool store = false;
-    if (set_slot != nullptr && set_slot->key != 0 && prepared != nullptr &&
+    if (set_slot != nullptr && set_slot->key != 0 && count <= Shader::NUM_SAMPLERS &&
         !TlgToggle::Disabled(TlgToggle::SamplerSetMemo)) {
         const u64 generation = texture_cache.SamplerGeneration();
         const u64 key = SamplerSetKey(stage, prepared);
@@ -3351,7 +3364,21 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
 bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
                                      u32 first_image_idx, bool& barrier, TextureSet*& slot) {
     const u32 count = static_cast<u32>(stage.images.size());
-    if (!prepared || count == 0 || count > TextureSet::MaxImages ||
+    // Stage Bind Memo: the Android default has no draw-preparation workers. With
+    // ISS_STAGE_BIND_MEMO=1 (default on Bionic), derive the exact live texture
+    // descriptors here instead of rejecting every draw that lacks PreparedStage.
+    // Every hit STILL validates backing generations, freshness and image layouts,
+    // and replays the transitions / in-flight LRU usage of the original path.
+    static const bool enable_unprepared = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* value = std::getenv("ISS_STAGE_BIND_MEMO");
+        return !value || value[0] != '0';
+#else
+        return false;
+#endif
+    }();
+    if ((!prepared && !enable_unprepared) || count == 0 ||
+        count > TextureSet::MaxImages ||
         TlgToggle::Disabled(TlgToggle::TextureSetMemo) || FrameCapture::Active()) {
         return false;
     }
@@ -3360,7 +3387,18 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             return false;
         }
     }
-    u64 key = XXH3_64bits_withSeed(prepared->image_hashes, count * sizeof(u64),
+    // PreparedStage supplies prehashed T#s on desktop. On ARM64 derive the same
+    // stable key from the current guest sharps; neither guest memory pointers
+    // nor the Vulkan view are cached merely by a hash.
+    std::array<u64, TextureSet::MaxImages> live_hashes{};
+    const u64* hashes = prepared ? prepared->image_hashes : live_hashes.data();
+    if (!prepared) {
+        for (u32 i = 0; i < count; ++i) {
+            const auto sharp = stage.images[i].GetSharp(stage);
+            live_hashes[i] = ImageDescHash(sharp, stage.images[i]);
+        }
+    }
+    u64 key = XXH3_64bits_withSeed(hashes, count * sizeof(u64),
                                    reinterpret_cast<u64>(&stage));
     key |= 1; // 0 marks an empty slot
     auto& set = texture_sets[key % texture_sets.size()];
@@ -3369,8 +3407,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
     const bool match = set.key == key && set.stage == &stage && set.count == count &&
                        set.generation == generation &&
                        set.scene_generation == scene_targets->Generation() &&
-                       std::equal(set.hashes.begin(), set.hashes.begin() + count,
-                                  prepared->image_hashes);
+                       std::equal(set.hashes.begin(), set.hashes.begin() + count, hashes);
     if (!match) {
         ++texture_set_why[set.key != key ? 0 : set.generation != generation ? 1 : 3];
         ++texture_set_misses;
@@ -3378,7 +3415,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         set.stage = &stage;
         set.count = 0;
         set.generation = ~0ull;
-        std::copy_n(prepared->image_hashes, count, set.hashes.begin());
+        std::copy_n(hashes, count, set.hashes.begin());
         return false;
     }
     // Every image still has the backing its view belongs to and needs no refresh.
