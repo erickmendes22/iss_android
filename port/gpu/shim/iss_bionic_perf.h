@@ -23,6 +23,7 @@ inline std::array<Counter, static_cast<unsigned>(Stage::Count)> counters{};
 inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
 inline std::atomic<std::uint64_t> descriptor_template_calls{0}, descriptor_template_bytes{0},
     descriptor_legacy_calls{0};
+inline std::atomic<std::uint64_t> fast_pipeline_bind_skipped{0};
 inline std::atomic<std::uint64_t> stage_bind_memo_hits{0}, stage_bind_memo_misses{0};
 inline std::atomic<std::uint64_t> descriptor_replay_skipped{0};
 inline std::atomic<std::uint64_t> descriptor_delta_partial{0}, descriptor_delta_bindings{0};
@@ -153,6 +154,8 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
                 static_cast<unsigned long long>(descriptor_delta_bindings.exchange(0)),
                 static_cast<unsigned long long>(descriptor_legacy_calls.exchange(0)),
                 static_cast<unsigned long long>(descriptor_template_bytes.exchange(0)));
+    std::printf("BionicFastDraw: redundant_graphics_pipeline_binds=%llu\n",
+                static_cast<unsigned long long>(fast_pipeline_bind_skipped.exchange(0)));
     std::printf("BionicStageMemo: unprepared_hits=%llu misses=%llu\n",
                 static_cast<unsigned long long>(stage_bind_memo_hits.exchange(0)),
                 static_cast<unsigned long long>(stage_bind_memo_misses.exchange(0)));
