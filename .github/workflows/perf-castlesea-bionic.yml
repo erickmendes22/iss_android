@@ -6,6 +6,9 @@ on:
     branches: [experimental-bionic]
 permissions:
   contents: read
+concurrency:
+  group: iss-perf-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   source-and-memo:
     runs-on: ubuntu-24.04
