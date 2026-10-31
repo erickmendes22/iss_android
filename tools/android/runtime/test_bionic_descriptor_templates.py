@@ -96,7 +96,13 @@ int main() {
         bodies = "\n".join(method(source, signature) for signature in (
             "void Pipeline::BuildDescriptorTemplate(", "void Pipeline::BindResources("))
         fixture = (ROOT / "tools/android/runtime/cpp/descriptor_templates.cpp").read_text()
-        code = fixture.replace("// PRODUCTION_METHODS", bodies)
+        # The real BindResources now uses recording-thread descriptor replay,
+        # so the executable fixture must compile those same production helpers.
+        start = source.index("namespace {\nusing ReplayCache = ")
+        end = source.index("} // namespace", start) + len("} // namespace")
+        memo_helpers = source[start:end]
+        code = fixture.replace("// PRODUCTION_MEMO_HELPERS", memo_helpers)
+        code = code.replace("// PRODUCTION_METHODS", bodies)
         self.compile_run(code, flags=("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          cases=((), ("direct",), ("compute",), ("off",), ("missing",), ("failure",),
                                 ("mismatch",), ("ordinary",), ("unsupported",), ("switchdirect",),

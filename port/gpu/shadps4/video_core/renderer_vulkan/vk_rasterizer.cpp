@@ -37,6 +37,8 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_occlusion.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_fast_pipeline_memo.h"
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_threads.h"
@@ -47,6 +49,31 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
+
+namespace {
+// Bind the previous graphics pipeline only if the command buffer and the full
+// recording-state epoch match. All normal DrawRecord/DrawIndirectRecord paths
+// continue to resolve vertex buffers, resources, barriers and push constants.
+void FastBindGraphicsPipeline(vk::CommandBuffer cmdbuf, vk::Pipeline pipeline,
+                              u64 tick, u64 epoch) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* flag = std::getenv("ISS_FAST_PIPELINE_BIND");
+        return !flag || flag[0] != '0';
+    }();
+    if (enabled) {
+        static thread_local FastGraphicsPipelineMemo<vk::CommandBuffer, vk::Pipeline> cache;
+        if (!cache.NeedsBind(cmdbuf, pipeline, tick, epoch)) {
+            if (IssBionicPerf::Enabled()) {
+                IssBionicPerf::fast_pipeline_bind_skipped.fetch_add(1, std::memory_order_relaxed);
+            }
+            return;
+        }
+    }
+#endif
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+}
+} // namespace
 
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
@@ -1190,11 +1217,24 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             ResolveIndexBuffer(index_offset);
         }
     }
-    EmitVertexBuffers();
-    if (is_indexed) {
-        EmitIndexBuffer();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
+    if (!native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
     }
 
+    // The outstanding memory barriers MUST be placed on the primary before
+    // vkCmdBeginRendering, even when secondary Vulkan recording is enabled.
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
@@ -1286,7 +1326,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    // Original path unchanged; Native Passes moves descriptor bindings into
+    // the secondary after vkCmdBeginRendering because the secondary does not
+    // inherit vkCmdBindDescriptorSets/vkCmdPushConstants from the primary.
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
@@ -1294,12 +1339,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, draw_prepared, &state, is_indexed, index_offset, nullptr);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        // Draw-scoped GPU state belongs to the exact command buffer that
+        // executes the draw. In particular, no graphics state is inherited
+        // from its parent primary by a Vulkan secondary command buffer.
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();
@@ -1311,6 +1365,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 num_instances = regs.num_instances.NumInstances();
     const u32 first_vertex = vertex_offset;
     const u32 first_instance = instance_offset;
+    const u64 fast_bind_tick = scheduler.CurrentTick();
+    const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         const auto draw = [&] {
             if (is_indexed) {
@@ -1320,10 +1376,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                 cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
             }
         };
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        FastBindGraphicsPipeline(cmdbuf, handle, fast_bind_tick, fast_bind_epoch);
         draw();
         if (square) [[unlikely]] {
-            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, square);
+            FastBindGraphicsPipeline(cmdbuf, square, fast_bind_tick, fast_bind_epoch);
             draw();
         }
     });
@@ -1438,9 +1494,23 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
 
-    BindVertexBuffers(pipeline);
-    if (is_indexed) {
-        BindIndexBuffer();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
+    if (native_graphics) {
+        ResolveVertexBuffers(pipeline, nullptr);
+        if (is_indexed) ResolveIndexBuffer(0);
+    } else {
+        BindVertexBuffers(pipeline);
+        if (is_indexed) BindIndexBuffer();
     }
 
     const auto [buffer, base] =
@@ -1473,17 +1543,25 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, nullptr, &state, is_indexed, 0, &indirect);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     ASSERT(stride == (is_indexed ? sizeof(VkDrawIndexedIndirectCommand)
                                  : sizeof(VkDrawIndirectCommand)));
@@ -1493,12 +1571,14 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 args_offset = base;
     const vk::Buffer counts = count_address != 0 ? count_buffer->Handle() : vk::Buffer{};
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
+    const u64 fast_bind_tick = scheduler.CurrentTick();
+    const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         for (const vk::Pipeline bound : {handle, square}) {
             if (!bound) {
                 break;
             }
-            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, bound);
+            FastBindGraphicsPipeline(cmdbuf, bound, fast_bind_tick, fast_bind_epoch);
             if (is_indexed) {
                 if (counts) {
                     cmdbuf.drawIndexedIndirectCount(args, args_offset, counts, counts_offset, max_count,
@@ -3203,8 +3283,21 @@ u64 Rasterizer::SamplerSetKey(const Shader::Info& stage, const PreparedStage* pr
     // GetSampler's inputs: the S#s, the border color base, the per-sampler depth flags and the
     // LOD bias of this draw.
     const u32 count = static_cast<u32>(stage.samplers.size());
-    u64 key =
-        count ? XXH3_64bits(prepared->sampler_sharps, count * sizeof(AmdGpu::Sampler)) : 0;
+    // Bionic normally disables speculative draw-preparation workers. Hash the live
+    // sampler sharps directly for the same resource-validating memo path in that mode.
+    u64 key = 0;
+    if (count) {
+        if (prepared) {
+            key = XXH3_64bits(prepared->sampler_sharps, count * sizeof(AmdGpu::Sampler));
+        } else {
+            std::array<AmdGpu::Sampler, Shader::NUM_SAMPLERS> current{};
+            if (count > current.size()) return 0;
+            for (u32 i = 0; i < count; ++i) {
+                current[i] = stage.samplers[i].GetSharp(stage);
+            }
+            key = XXH3_64bits(current.data(), count * sizeof(AmdGpu::Sampler));
+        }
+    }
     const u64 border_color_base = Regs().ta_bc_base.base_addr;
     key = HashCombine(key, border_color_base);
     key = HashCombine(key, u64(std::bit_cast<u32>(sampler_lod_bias)));
@@ -3226,7 +3319,7 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
     // memo when a sampler was destroyed (its LRU ids may be gone or reused).
     bool memo = false;
     bool store = false;
-    if (set_slot != nullptr && set_slot->key != 0 && prepared != nullptr &&
+    if (set_slot != nullptr && set_slot->key != 0 && count <= Shader::NUM_SAMPLERS &&
         !TlgToggle::Disabled(TlgToggle::SamplerSetMemo)) {
         const u64 generation = texture_cache.SamplerGeneration();
         const u64 key = SamplerSetKey(stage, prepared);
@@ -3302,7 +3395,21 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
 bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
                                      u32 first_image_idx, bool& barrier, TextureSet*& slot) {
     const u32 count = static_cast<u32>(stage.images.size());
-    if (!prepared || count == 0 || count > TextureSet::MaxImages ||
+    // Stage Bind Memo: the Android default has no draw-preparation workers. With
+    // ISS_STAGE_BIND_MEMO=1 (default on Bionic), derive the exact live texture
+    // descriptors here instead of rejecting every draw that lacks PreparedStage.
+    // Every hit STILL validates backing generations, freshness and image layouts,
+    // and replays the transitions / in-flight LRU usage of the original path.
+    static const bool enable_unprepared = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* value = std::getenv("ISS_STAGE_BIND_MEMO");
+        return !value || value[0] != '0';
+#else
+        return false;
+#endif
+    }();
+    if ((!prepared && !enable_unprepared) || count == 0 ||
+        count > TextureSet::MaxImages ||
         TlgToggle::Disabled(TlgToggle::TextureSetMemo) || FrameCapture::Active()) {
         return false;
     }
@@ -3311,7 +3418,18 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             return false;
         }
     }
-    u64 key = XXH3_64bits_withSeed(prepared->image_hashes, count * sizeof(u64),
+    // PreparedStage supplies prehashed T#s on desktop. On ARM64 derive the same
+    // stable key from the current guest sharps; neither guest memory pointers
+    // nor the Vulkan view are cached merely by a hash.
+    std::array<u64, TextureSet::MaxImages> live_hashes{};
+    const u64* hashes = prepared ? prepared->image_hashes : live_hashes.data();
+    if (!prepared) {
+        for (u32 i = 0; i < count; ++i) {
+            const auto sharp = stage.images[i].GetSharp(stage);
+            live_hashes[i] = ImageDescHash(sharp, stage.images[i]);
+        }
+    }
+    u64 key = XXH3_64bits_withSeed(hashes, count * sizeof(u64),
                                    reinterpret_cast<u64>(&stage));
     key |= 1; // 0 marks an empty slot
     auto& set = texture_sets[key % texture_sets.size()];
@@ -3320,16 +3438,18 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
     const bool match = set.key == key && set.stage == &stage && set.count == count &&
                        set.generation == generation &&
                        set.scene_generation == scene_targets->Generation() &&
-                       std::equal(set.hashes.begin(), set.hashes.begin() + count,
-                                  prepared->image_hashes);
+                       std::equal(set.hashes.begin(), set.hashes.begin() + count, hashes);
     if (!match) {
         ++texture_set_why[set.key != key ? 0 : set.generation != generation ? 1 : 3];
         ++texture_set_misses;
+        if (!prepared && IssBionicPerf::Enabled()) {
+            IssBionicPerf::stage_bind_memo_misses.fetch_add(1, std::memory_order_relaxed);
+        }
         set.key = key;
         set.stage = &stage;
         set.count = 0;
         set.generation = ~0ull;
-        std::copy_n(prepared->image_hashes, count, set.hashes.begin());
+        std::copy_n(hashes, count, set.hashes.begin());
         return false;
     }
     // Every image still has the backing its view belongs to and needs no refresh.
@@ -3351,11 +3471,17 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             (upscaler->Enabled() && upscaler->RedirectsSampled(entry.id))) {
             ++texture_set_why[2];
             ++texture_set_misses;
+            if (!prepared && IssBionicPerf::Enabled()) {
+                IssBionicPerf::stage_bind_memo_misses.fetch_add(1, std::memory_order_relaxed);
+            }
             set.generation = ~0ull;
             return false;
         }
     }
     ++texture_set_hits;
+    if (!prepared && IssBionicPerf::Enabled()) {
+        IssBionicPerf::stage_bind_memo_hits.fetch_add(1, std::memory_order_relaxed);
+    }
     // `slot` stays the hit set: BindSamplers reuses the samplers it resolved (SamplerSetMemo).
     for (u32 i = 0; i < count; ++i) {
         const auto& entry = set.entries[i];
@@ -3756,6 +3882,48 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         state.width = proxy.width;
         state.height = proxy.height;
         target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
+    }
+    // Exact formats inherited by secondary Vulkan commands. The existing
+    // graphics pipeline uses LiverpoolToVK::SurfaceFormat/DepthFormat. Restrict
+    // the pilot to ordinary 1x attachments, no mixed samples or feedback loops.
+    static const bool arm64_native_secondary_requested = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* e = std::getenv("ISS_NATIVE_PASSES_ARM64_SECONDARY");
+        return e && e[0] == '1';
+#else
+        return false;
+#endif
+    }();
+    if (arm64_native_secondary_requested &&
+        state.num_color_attachments <= state.native_color_formats.size() &&
+        key.num_samples == 1 && key.depth_samples <= 1 &&
+        !attachment_feedback_loop) {
+        bool eligible = true;
+        for (u32 i = 0; i < state.num_color_attachments; ++i) {
+            if (!state.color_attachments[i].image_view) {
+                // A native secondary must not assume an attachment that is
+                // absent even when the graphics pipeline has a format for it.
+                eligible = false;
+                state.native_color_formats[i] = vk::Format::eUndefined;
+                continue;
+            }
+            if (key.color_samples[i] > 1) eligible = false;
+            const auto& buffer = key.color_buffers[i];
+            state.native_color_formats[i] = instance.GetSupportedFormat(
+                LiverpoolToVK::SurfaceFormat(buffer.data_format, buffer.num_format),
+                vk::FormatFeatureFlagBits2::eColorAttachment);
+        }
+        if (state.depth_stencil_attachment.has_depth ||
+            state.depth_stencil_attachment.has_stencil) {
+            const auto depth_format = instance.GetSupportedFormat(
+                LiverpoolToVK::DepthFormat(key.z_format, key.stencil_format),
+                vk::FormatFeatureFlagBits2::eDepthStencilAttachment);
+            state.native_depth_format =
+                state.depth_stencil_attachment.has_depth ? depth_format : vk::Format::eUndefined;
+            state.native_stencil_format =
+                state.depth_stencil_attachment.has_stencil ? depth_format : vk::Format::eUndefined;
+        }
+        state.native_eligible = eligible ? 1 : 0;
     }
     if (census_on) {
         std::array<const VideoCore::ImageInfo*, AmdGpu::NUM_COLOR_BUFFERS> colors{};

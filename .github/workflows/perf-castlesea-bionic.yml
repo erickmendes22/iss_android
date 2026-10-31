@@ -1,0 +1,198 @@
+name: ISS Bionic - performance APK
+on:
+  pull_request:
+    branches: [experimental-bionic]
+permissions:
+  contents: read
+# One run for the PR. A newer commit cancels the older run before starting.
+concurrency:
+  group: iss-bionic-perf-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  build-and-sign-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      ISS_JOBS: '2'
+      ISS_RELEASE_BUILD: '1'
+    steps:
+      # Build code from an optional experiment, but run the job on the
+      # signed experimental-bionic workflow ref so the ORIGINAL signing-key
+      # cache remains available. Never generate an ephemeral key for releases.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Reject packages that cannot upgrade the installed Daedalus app
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          manifest = ET.parse('android/app/BionicAndroidManifest.xml').getroot()
+          actual = manifest.attrib.get('package')
+          expected = 'com.daedalus.iss.bionic'
+          if actual != expected:
+              raise SystemExit(f'Build rejected: {actual!r} cannot update the installed app {expected!r}')
+          build = Path('tools/android/bionic/build_apk.sh').read_text()
+          if "package: name='com.daedalus.iss.bionic'" not in build:
+              raise SystemExit('Build rejected: build_apk.sh does not verify the original package identity')
+          print('Upgrade-compatible Android package identity:', actual)
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
+      - uses: actions/cache@v4
+        with:
+          path: .local-deps/android/bionic-development.keystore
+          key: iss-bionic-development-signing-v1
+      - name: Verify established release signing key
+        run: |
+          test -s .local-deps/android/bionic-development.keystore
+          actual=$(keytool -exportcert -keystore .local-deps/android/bionic-development.keystore \
+            -storepass android -alias iss-bionic-dev | sha256sum | cut -d ' ' -f 1)
+          test "$actual" = "$(cat tools/android/bionic/signing-certificate.sha256)"
+      - name: Check Bionic Android launcher Java compilation
+        run: |
+          mkdir -p out/android-bionic-classes
+          javac -encoding UTF-8 -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-35/android.jar" \
+            -d out/android-bionic-classes android/app/src/ro/cobrabm/fexdroid/*.java
+      - name: Check Bionic source isolation and game features
+        run: |
+          python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
+          python3 -m compileall -q tools/android/bionic
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: ci/environment.yml
+          cache-environment: true
+          init-shell: bash
+      - name: Install host build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
+            pkg-config patchelf unzip xz-utils zstd bison flex python3-venv
+      - name: Set NDK and host headers
+        shell: bash -el {0}
+        run: |
+          echo "ISS_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "ISS_BIONIC_HEADERS=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - name: Validate compact descriptors against the pinned Vulkan-Headers
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_descriptor_templates.py' -v
+      - name: Validate vertex state reuse against the pinned Vulkan-Headers
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_vertex_input.py' -v
+      - name: Validate mapped readback against the pinned Vulkan-Headers
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_mapped_readback.py' -v
+      - name: Validate buffer barriers against pinned Vulkan-Headers and Turnip cache reference
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_buffer_barriers.py' -v
+      - name: Validate parallel recording and ordered host publication
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_parallel_recording.py' -v
+      - name: Build Bloodframe and direct PKG extractor
+        shell: bash -el {0}
+        run: |
+          bash tools/android/bionic/build_bloodframe.sh
+          bash tools/android/bionic/build_pkg.sh
+      - name: Stage pinned Turnip Gen8 V38 Patched and v27 R1
+        shell: bash -el {0}
+        run: |
+          python3 tools/android/bionic/stage_driver.py --output out/bionic/drivers/gen8
+          test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
+          python3 tools/android/bionic/stage_driver.py --manifest tools/android/bionic/driver-gen7.json --output out/bionic/drivers/gen7
+          test -s out/bionic/drivers/gen7/libvulkan_freedreno.so
+      - name: Restore reusable Android Bionic dependency prefix
+        id: bionic-deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .local-deps/android/bionic-prefix
+            .local-deps/android/bionic-src
+          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
+          restore-keys: |
+            iss-bionic-deps-v2-${{ runner.os }}-
+      - name: Build Bionic dependency prefix
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_deps.sh
+      - name: Cache successfully built Android Bionic dependencies
+        if: steps.bionic-deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .local-deps/android/bionic-prefix
+            .local-deps/android/bionic-src
+          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
+      - name: Check ARM64 FFmpeg static objects for Android shared PIC relocations
+        shell: bash -el {0}
+        run: bash tools/android/bionic/check_ffmpeg_pic.sh
+      - name: Configure ISS Bionic GPU and audit NDK linker inputs
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_gpu.sh --configure-only
+      - name: Preflight native inFAMOUS HLE and loader C sources
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_native_runtime.sh --compile-only
+      # Python passed its complete cross-build already. Run GPU/link first to
+      # expose native ELF integration errors without waiting for Python again.
+      - name: Compile inFAMOUS FEX CPU and native Vulkan/HLE
+        shell: bash -el {0}
+        run: |
+          bash tools/android/bionic/build_cpu.sh
+          bash tools/android/bionic/build_gpu.sh
+      - name: Compile native inFAMOUS loader and AHardwareBuffer JNI bridge
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_native_runtime.sh
+      - name: Build Android Bionic Python for preserved preparation and patches
+        run: ISS_NDK="$ANDROID_HOME/ndk/29.0.14206865" ISS_JOBS=2 bash tools/android/bionic/build_python.sh
+      - name: Validate Bionic native binaries and complete preparation runtime
+        run: |
+          python3 tools/android/bionic/verify_bionic.py --ndk "$ANDROID_HOME/ndk/29.0.14206865" --root out/bionic --complete
+      - name: Assemble, sign and verify isolated inFAMOUS Bionic APK
+        run: bash tools/android/bionic/build_apk.sh
+      - name: Upload native Bionic libraries and driver metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-bionic-perf-native-${{ github.sha }}
+          path: |
+            out/bionic/lib/libisscpu.so
+            out/bionic/lib/libtlggpu.so
+            out/bionic/drivers/gen8/PINNED-DRIVER.json
+            out/bionic/drivers/gen7/PINNED-DRIVER.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-bionic-perf-apk-${{ github.sha }}
+          path: |
+            out/release/inFAMOUS-Second-Son-Daedalus-v0.2.apk
+            out/release/inFAMOUS-Second-Son-Daedalus-v0.2.apk.sha256
+            out/release/RELEASE_NOTES.md
+            out/release/RELEASE-METADATA.json
+            out/release/LICENSE.txt
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: iss-bionic-perf-diagnostics-${{ github.sha }}
+          path: |
+            .local-deps/android/bionic-build/**/*.log
+            out/bionic/gpu/CMakeFiles/CMakeConfigureLog.yaml
+            out/bionic/gpu/.cmake/api/v1/reply/target-tlggpu-*.json
+          if-no-files-found: ignore

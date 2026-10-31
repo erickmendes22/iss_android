@@ -66,8 +66,9 @@ constexpr std::size_t COMMAND_BUFFER_POOL_SIZE = 16;
 constexpr std::size_t COMMAND_BUFFER_POOL_SIZE = 4;
 #endif
 
-CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore)
-    : ResourcePool{work_semaphore, COMMAND_BUFFER_POOL_SIZE}, instance{instance} {
+CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore,
+                         vk::CommandBufferLevel level_)
+    : ResourcePool{work_semaphore, COMMAND_BUFFER_POOL_SIZE}, instance{instance}, level{level_} {
     const vk::CommandPoolCreateInfo pool_create_info = {
         .flags = vk::CommandPoolCreateFlagBits::eTransient |
                  vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -88,7 +89,7 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
 
     const vk::CommandBufferAllocateInfo buffer_alloc_info = {
         .commandPool = *cmd_pool,
-        .level = vk::CommandBufferLevel::ePrimary,
+        .level = level,
         .commandBufferCount = COMMAND_BUFFER_POOL_SIZE,
     };
 

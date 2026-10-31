@@ -246,8 +246,10 @@ void SceneTargets::Resample(vk::Image src, vk::Image dst, const VideoCore::Image
     });
     const auto pipeline = ResamplePipeline(format, stencil);
     const auto layout = *resample_layout;
-    // This helper binds a static vertex-input pipeline, disturbing the dynamic format.
-    scheduler.InvalidateVertexInput();
+    // This helper binds a host graphics pipeline AND push descriptors.
+    // Raw descriptor/pipeline fast paths cannot carry the old guest state
+    // across this pass even when they share the Vulkan command buffer.
+    scheduler.InvalidateGuestGraphicsBindings();
     scheduler.Record([=](vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView = target_view,
