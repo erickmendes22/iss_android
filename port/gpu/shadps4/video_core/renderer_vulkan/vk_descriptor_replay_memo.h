@@ -20,7 +20,7 @@
 
 namespace Vulkan {
 
-template <class CommandBuffer, class PipelineLayout>
+template <class CommandBuffer, class PipelineLayout, class TemplateHandle = std::uint64_t>
 class DescriptorReplayMemo {
 public:
     struct ByteRange {
@@ -35,7 +35,7 @@ public:
     // Optional partial push-descriptor update. Ranges describe complete Vulkan
     // binding values in the packed template; pointer differences outside those
     // ranges are padding, not descriptor changes. Never reuse across layouts.
-    Decision Select(CommandBuffer command, PipelineLayout layout, std::uint64_t tick,
+    Decision Select(CommandBuffer command, PipelineLayout layout, TemplateHandle update_template, std::uint64_t tick,
                     std::uint64_t raw_epoch, unsigned bind_point,
                     std::span<const std::uint64_t> payload,
                     std::span<const ByteRange> ranges,
@@ -46,11 +46,11 @@ public:
         }
         auto& entry = entries[bind_point];
         const bool compatible = entry.valid && entry.command == command &&
-                                entry.layout == layout && entry.tick == tick &&
+                                entry.layout == layout && entry.update_template == update_template && entry.tick == tick &&
                                 entry.raw_epoch == raw_epoch &&
                                 entry.payload.size() == payload.size();
         if (!compatible) {
-            (void)NeedsPush(command, layout, tick, raw_epoch, bind_point, payload);
+            (void)NeedsPush(command, layout, update_template, tick, raw_epoch, bind_point, payload);
             return {};
         }
         if (std::equal(entry.payload.begin(), entry.payload.end(), payload.begin())) {
@@ -86,7 +86,7 @@ public:
         return {Mode::Full, changed};
     }
 
-    bool NeedsPush(CommandBuffer command, PipelineLayout layout, std::uint64_t tick,
+    bool NeedsPush(CommandBuffer command, PipelineLayout layout, TemplateHandle update_template, std::uint64_t tick,
                    std::uint64_t raw_epoch, unsigned bind_point,
                    std::span<const std::uint64_t> payload) {
         // Vulkan only defines graphics and compute bind points for this path.
@@ -96,12 +96,13 @@ public:
         }
         auto& entry = entries[bind_point];
         const bool same = entry.valid && entry.command == command && entry.layout == layout &&
-                          entry.tick == tick && entry.raw_epoch == raw_epoch &&
+                          entry.update_template == update_template && entry.tick == tick && entry.raw_epoch == raw_epoch &&
                           entry.payload.size() == payload.size() &&
                           std::equal(entry.payload.begin(), entry.payload.end(), payload.begin());
         if (!same) {
             entry.command = command;
             entry.layout = layout;
+            entry.update_template = update_template;
             entry.tick = tick;
             entry.raw_epoch = raw_epoch;
             entry.payload.assign(payload.begin(), payload.end());
@@ -126,6 +127,7 @@ private:
     struct Entry {
         CommandBuffer command{};
         PipelineLayout layout{};
+        TemplateHandle update_template{};
         std::uint64_t tick{}, raw_epoch{};
         std::vector<std::uint64_t> payload{};
         bool valid = false;
