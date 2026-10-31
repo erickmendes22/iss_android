@@ -39,6 +39,8 @@
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
+#include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -1227,6 +1229,94 @@ void PipelineCache::UseDefaultPipelineWait() {
     }
 }
 
+namespace {
+// Match the working TryPreparedPipeline validation policy, not PM4 registers
+// alone. This is opt-in until scene-by-scene A/B and Android driver testing.
+bool FastGraphicsKeyEnabled() {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* env = std::getenv("ISS_FAST_DRAW_KEY");
+        return env && env[0] == '1';
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+} // namespace
+
+const GraphicsPipeline* PipelineCache::TryFastGraphicsPipeline(
+    const DrawIndirectParams params, const PreparedDraw* prepared) {
+    if (!FastGraphicsKeyEnabled() || prepared || params.is_indirect ||
+        EmulatorSettings.IsShaderCollect() || FrameCapture::Active() || !fast_graphics.valid ||
+        fast_graphics.tick != scheduler.CurrentTick() ||
+        fast_graphics.frame != TlgStats::gpu_frames.load(std::memory_order_relaxed) ||
+        fast_graphics.checksum != liverpool->gfx_reg_checksum) {
+        return nullptr;
+    }
+    // The existing precompiler/prepared-draw path checks all shader-program
+    // identities AND live flattened guest user data before trusting a cached
+    // pipeline. Repeat that validation here: shader constants, fetch descriptors
+    // and buffer sizes can change without a new PM4 shader program address.
+    const auto& regs = liverpool->regs;
+    for (const auto& remembered : fast_graphics.stages) {
+        if (!remembered.info) continue;
+        const auto* pgm = regs.ProgramForStage(static_cast<u32>(remembered.hw_stage));
+        if (!pgm || !pgm->Address<u32*>()) return nullptr;
+        const auto found = AmdGpu::TryGetParams(*pgm);
+        if (!found || found->hash != remembered.program_hash) return nullptr;
+        auto& info = *const_cast<Shader::Info*>(remembered.info);
+        info.pgm_base = found->Base();
+        info.user_data = found->user_data;
+        info.RefreshFlatBuf();
+        if (info.pgm_base != remembered.program_base ||
+            info.flattened_ud_buf.size() != remembered.flat.size() ||
+            std::memcmp(info.flattened_ud_buf.data(), remembered.flat.data(),
+                        remembered.flat.size() * sizeof(u32)) != 0) {
+            return nullptr;
+        }
+    }
+    TlgRegion::NotePipeline('g', fast_graphics.key_hash, true);
+    if (IssBionicPerf::Enabled()) {
+        IssBionicPerf::fast_draw_key_hits.fetch_add(1, std::memory_order_relaxed);
+    }
+    return fast_graphics.pipeline;
+}
+
+const GraphicsPipeline* PipelineCache::RememberFastGraphicsPipeline(
+    const GraphicsPipeline* pipeline, const DrawIndirectParams params,
+    const PreparedDraw* prepared) {
+    fast_graphics.valid = false;
+    if (!FastGraphicsKeyEnabled() || prepared || params.is_indirect || !pipeline ||
+        EmulatorSettings.IsShaderCollect() || FrameCapture::Active()) {
+        return pipeline;
+    }
+    FastGraphicsState next{};
+    next.pipeline = pipeline;
+    next.tick = scheduler.CurrentTick();
+    next.frame = TlgStats::gpu_frames.load(std::memory_order_relaxed);
+    next.checksum = liverpool->gfx_reg_checksum;
+    next.key_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
+    const auto& regs = liverpool->regs;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        const auto* info = sel.infos[i];
+        if (!info) continue;
+        const auto* pgm = regs.ProgramForStage(static_cast<u32>(info->hw_stage));
+        if (!pgm || !pgm->Address<u32*>()) return pipeline;
+        const auto found = AmdGpu::TryGetParams(*pgm);
+        if (!found) return pipeline;
+        auto& stage = next.stages[i];
+        stage.info = info;
+        stage.hw_stage = info->hw_stage;
+        stage.program_hash = found->hash;
+        stage.program_base = found->Base();
+        stage.flat.assign(info->flattened_ud_buf.begin(), info->flattened_ud_buf.end());
+    }
+    next.valid = true;
+    fast_graphics = std::move(next);
+    return pipeline;
+}
+
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params,
                                                            const PreparedDraw* prepared) {
     SeedWorkerCaches();
@@ -1247,6 +1337,11 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             return pipeline;
         }
     }
+    // The Bionic build uses no speculative draw-preparation workers by default.
+    // Fast Draw checks the exact shader data before bypassing pipeline selection.
+    if (const auto* ready = TryFastGraphicsPipeline(params, prepared)) {
+        return ready;
+    }
     sel.draw_indirect_params = params;
     if (!RefreshGraphicsKey(sel)) {
         if (sel.compilation_pending) {
@@ -1266,7 +1361,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (AsyncCompilation() && !sel.regs->stage_enable.hs_en && !EmulatorSettings.IsShaderCollect()) {
         const auto found = graphics_pipelines.find(sel.graphics_key);
         if (found != graphics_pipelines.end()) {
-            return found->second.get();
+            return RememberFastGraphicsPipeline(found->second.get(), params, prepared);
         }
         if (sel.sync_compile) {
             // tlg: BP07: this draw does not go without. Wait for the worker building the
@@ -1280,7 +1375,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 PublishGraphics();
                 const auto ready = graphics_pipelines.find(sel.graphics_key);
                 if (ready != graphics_pipelines.end()) {
-                    return ready->second.get();
+                    return RememberFastGraphicsPipeline(ready->second.get(), params, prepared);
                 }
             }
             goto compile_now;
@@ -1327,7 +1422,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                         PublishGraphics();
                         if (const auto done = graphics_pipelines.find(sel.graphics_key);
                             done != graphics_pipelines.end()) {
-                            return done->second.get();
+                            return RememberFastGraphicsPipeline(done->second.get(), params, prepared);
                         }
                     }
                 }
@@ -1364,7 +1459,7 @@ compile_now:
         }
         sel.fetch_shader.reset();
     }
-    return it->second.get();
+    return RememberFastGraphicsPipeline(it->second.get(), params, prepared);
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
@@ -2167,6 +2262,7 @@ std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule mo
         for (auto& key : pipeline_keys) {
             if (std::holds_alternative<GraphicsPipelineKey>(key)) {
                 auto& graphics_key = std::get<GraphicsPipelineKey>(key);
+                fast_graphics.valid = false;
                 graphics_pipelines.erase(graphics_key);
             } else if (std::holds_alternative<ComputePipelineKey>(key)) {
                 auto& compute_key = std::get<ComputePipelineKey>(key);
