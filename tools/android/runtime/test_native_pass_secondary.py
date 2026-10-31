@@ -15,7 +15,6 @@ class NativeSecondaryIntegration(unittest.TestCase):
    self.assertIn(s,h)
   for s in ['eContentsSecondaryCommandBuffers','vk::CommandBufferInheritanceRenderingInfo',
             'eRenderPassContinue','primary.executeCommands(scope.buffer)',
-            'rendering_observer->AllowsSecondaryRendering()',
             'native_secondary_pools[native_lane]->Commit()']:
    self.assertIn(s,c)
   self.assertIn('state.native_eligible = eligible ? 1 : 0;',r)
@@ -30,6 +29,7 @@ class NativeSecondaryIntegration(unittest.TestCase):
   self.assertIn('ISS_NATIVE_PASSES_ARM64_COLOR_PASSES',c)
   self.assertIn('WillUseNativeSecondary(new_state)',c)
   self.assertIn('WillUseNativeSecondary(const RenderState& next)',h)
+  self.assertIn('rendering_observer->AllowsSecondaryRendering()',h)
   self.assertIn('next.num_color_attachments != 0 && !native_secondary_color_passes',h)
   self.assertEqual(r.count('scheduler.WillUseNativeSecondary(state)'),2)
   self.assertEqual(r.count('scheduler.IsNativeSecondaryRendering()'),2)
