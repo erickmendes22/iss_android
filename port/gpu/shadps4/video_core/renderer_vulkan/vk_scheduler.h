@@ -63,6 +63,14 @@ struct RenderState {
     u16 num_layers;
     u16 num_color_attachments;
 
+    // Native Passes ARM64: exact pipeline formats for Vulkan dynamic-rendering
+    // secondary inheritance. Not included in render-state identity unless enabled.
+    std::array<vk::Format, 8> native_color_formats{};
+    vk::Format native_depth_format{vk::Format::eUndefined};
+    vk::Format native_stencil_format{vk::Format::eUndefined};
+    vk::SampleCountFlagBits native_samples{vk::SampleCountFlagBits::e1};
+    u32 native_eligible{0};
+
     bool operator==(const RenderState& other) const noexcept {
         return std::memcmp(this, &other, sizeof(RenderState)) == 0;
     }
@@ -680,6 +688,9 @@ public:
     virtual void OnBeginRendering() = 0;
     /// The rendering scope is about to end.
     virtual void OnEndRendering() = 0;
+    // Observers with active GPU queries cannot inherit those queries in a
+    // secondary command buffer without the Vulkan inheritedQueries feature.
+    virtual bool AllowsSecondaryRendering() const noexcept { return false; }
 };
 
 class Scheduler {
@@ -765,6 +776,12 @@ public:
     /// KickRecording() or submission.
     [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
         CheckOwner(__builtin_return_address(0));
+        // A raw primary command call cannot execute inside a scope begun with
+        // eContentsSecondaryCommandBuffers. Close the scope before switching
+        // to direct mode, then the next DrawRecord begins another scope.
+        if (native_secondary_enabled && is_rendering) {
+            EndRendering();
+        }
         if (recording_threaded && !direct_mode) {
             SyncRecording();
             direct_mode = true;
@@ -774,12 +791,11 @@ public:
         // Raw callers may bind a graphics pipeline with static vertex input. Even if
         // already in direct mode, do not reuse state across an untracked command stream.
         vertex_input_state.Invalidate();
-        // Raw Vulkan callers may rebind push descriptors behind the renderer's back.
         descriptor_stream_epoch.fetch_add(1, std::memory_order_relaxed);
         return current_cmdbuf;
     }
 
-    /// Changes when an untracked raw Vulkan user can alter descriptor bindings.
+    /// Changes when untracked raw Vulkan calls may alter descriptor bindings.
     [[nodiscard]] u64 DescriptorStreamEpoch() const noexcept {
         return descriptor_stream_epoch.load(std::memory_order_relaxed);
     }
@@ -801,6 +817,26 @@ public:
     /// everything it uses (capture by value): it may run later on the recording thread.
     template <typename Func>
     void Record(Func&& func) {
+        // The normal Record() path redirects Vulkan draw/bind state into the
+        // secondary while an eligible dynamic-rendering scope is active.
+        // BeginRendering/EndRendering use RecordPrimary() instead.
+        if (native_secondary_enabled && IsRecordingDeferred()) {
+            const unsigned lane = parallel_lane;
+            RecordPrimary([this, lane, fn = std::forward<Func>(func)](
+                              vk::CommandBuffer primary) mutable {
+                const vk::CommandBuffer active =
+                    native_secondary_scopes[lane].active
+                        ? native_secondary_scopes[lane].buffer
+                        : primary;
+                fn(active);
+            });
+            return;
+        }
+        RecordPrimary(std::forward<Func>(func));
+    }
+
+    template <typename Func>
+    void RecordPrimary(Func&& func) {
         CheckOwner(__builtin_return_address(0));
         if (!recording_threaded || direct_mode) {
             func(current_cmdbuf);
@@ -917,6 +953,25 @@ public:
     [[nodiscard]] bool IsRendering() const noexcept {
         return is_rendering;
     }
+    [[nodiscard]] bool IsNativeSecondaryRendering() const noexcept {
+        return native_secondary_current_scope;
+    }
+    [[nodiscard]] bool NativeSecondaryRequested() const noexcept {
+        return native_secondary_enabled;
+    }
+    /// Query this BEFORE moving pipeline/descriptor binding after BeginRendering.
+    /// Ineligible graphics passes must retain the unchanged primary draw order.
+    [[nodiscard]] bool WillUseNativeSecondary(const RenderState& next) const noexcept {
+        if (!native_secondary_enabled) return false;
+        if (is_rendering && render_state == next) return native_secondary_current_scope;
+        if (!recording_threaded || direct_mode || FullBarriers() || !next.native_eligible)
+            return false;
+        if (rendering_observer && !rendering_observer->AllowsSecondaryRendering()) return false;
+        // Keep color-output passes on the working primary Vulkan renderer until
+        // exact inheritance and framebuffer contents pass device validation.
+        if (next.num_color_attachments != 0 && !native_secondary_color_passes) return false;
+        return true;
+    }
 
     /// tlg: see RenderingObserver (one at a time; nullptr removes it).
     void SetRenderingObserver(RenderingObserver* observer) noexcept {
@@ -1013,6 +1068,15 @@ private:
     Semaphore work_semaphore;
     CommandPool command_pool;
     std::unique_ptr<CommandPool> parallel_pool;
+    struct NativeSecondaryScope {
+        vk::CommandBuffer buffer{};
+        bool active = false;
+    };
+    std::array<NativeSecondaryScope, 2> native_secondary_scopes{};
+    std::array<std::unique_ptr<CommandPool>, 2> native_secondary_pools{};
+    bool native_secondary_enabled = false;
+    bool native_secondary_color_passes = false;
+    bool native_secondary_current_scope = false;
     std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
     unsigned parallel_lane = 0;
     size_t parallel_bytes = 0;
