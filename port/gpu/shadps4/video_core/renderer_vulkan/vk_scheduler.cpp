@@ -30,6 +30,25 @@ std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    // Experimental real Vulkan secondary command recording on ARM64 only.
+    // Requires RenderState formats/1x MSAA and no rendering observer (Vulkan
+    // inherited occlusion queries require additional feature support).
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    if (const char* e = std::getenv("ISS_NATIVE_PASSES_ARM64_SECONDARY");
+        e && e[0] == '1') {
+        native_secondary_enabled = true;
+        if (const char* color = std::getenv("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES");
+            color && color[0] == '1') native_secondary_color_passes = true;
+        for (auto& p : native_secondary_pools) {
+            p = std::make_unique<CommandPool>(instance, &work_semaphore,
+                                                vk::CommandBufferLevel::eSecondary);
+        }
+        std::printf("ISS Native Passes ARM64 Vulkan secondary recording: %s "
+                    "(color passes %s; no pass reuse yet)\n",
+                    "experimental on",
+                    native_secondary_color_passes ? "unsafe opt-in" : "primary fallback");
+    }
+#endif
     // tlg: TLG_VK_RECORD_THREAD=0 records on the calling thread.
     const char* env = std::getenv("TLG_VK_RECORD_THREAD");
     if (threaded_recording && !(env && env[0] == '0')) {
@@ -114,6 +133,10 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
         return;
     }
+    // Decide using the previous scope state. Once render_state is assigned,
+    // WillUseNativeSecondary would observe a matching open scope whose
+    // native_secondary_current_scope has just been reset by EndRendering().
+    const bool use_secondary = WillUseNativeSecondary(new_state);
     EndRendering();
     is_rendering = true;
     render_state = new_state;
@@ -162,6 +185,16 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .pStencilAttachment = db.has_stencil ? &stencil_attachment : nullptr,
     };
 
+    // Keep exactly the same decision as the per-draw resource binding path.
+    native_secondary_current_scope = use_secondary;
+    if (native_secondary_enabled) {
+        // Vulkan secondary command buffers inherit rendering attachments, NOT
+        // dynamic state, vertex layouts, descriptor sets, or bound pipelines.
+        // Each fresh pass must re-emit the graphics-state commands into its
+        // own command buffer. Invalidate also when primary fallback is used.
+        dynamic_state.Invalidate();
+        vertex_input_state.Invalidate();
+    }
     if (!recording_threaded) {
         if (FullBarriers()) {
             RecordFullBarrier(current_cmdbuf);
@@ -172,20 +205,40 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         }
         return;
     }
-    // The attachment infos live on this stack frame: the recorded closure keeps copies.
-    Record([info = rendering_info, color_attachments, depth_attachment,
-            stencil_attachment](vk::CommandBuffer cmdbuf) mutable {
+    // Secondary content must begin on the PRIMARY command buffer. Every later
+    // graphics closure is directed to the matching SECONDARY recorder lane.
+    const unsigned native_lane = parallel_lane;
+    RecordPrimary([this, info = rendering_info, color_attachments, depth_attachment,
+                   stencil_attachment, state = new_state, use_secondary,
+                   native_lane](vk::CommandBuffer primary) mutable {
         info.pColorAttachments = color_attachments.data();
-        if (info.pDepthAttachment) {
-            info.pDepthAttachment = &depth_attachment;
+        if (info.pDepthAttachment) info.pDepthAttachment = &depth_attachment;
+        if (info.pStencilAttachment) info.pStencilAttachment = &stencil_attachment;
+        if (FullBarriers()) RecordFullBarrier(primary);
+        if (use_secondary) {
+            info.flags |= vk::RenderingFlagBits::eContentsSecondaryCommandBuffers;
         }
-        if (info.pStencilAttachment) {
-            info.pStencilAttachment = &stencil_attachment;
+        primary.beginRendering(info);
+        if (use_secondary) {
+            const auto secondary = native_secondary_pools[native_lane]->Commit();
+            const vk::CommandBufferInheritanceRenderingInfo rendering_inheritance = {
+                .colorAttachmentCount = state.num_color_attachments,
+                .pColorAttachmentFormats = state.native_color_formats.data(),
+                .depthAttachmentFormat = state.native_depth_format,
+                .stencilAttachmentFormat = state.native_stencil_format,
+                .rasterizationSamples = state.native_samples,
+            };
+            const vk::CommandBufferInheritanceInfo inheritance = {
+                .pNext = &rendering_inheritance,
+            };
+            const vk::CommandBufferBeginInfo begin = {
+                .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit |
+                         vk::CommandBufferUsageFlagBits::eRenderPassContinue,
+                .pInheritanceInfo = &inheritance,
+            };
+            Check(secondary.begin(begin));
+            native_secondary_scopes[native_lane] = {secondary, true};
         }
-        if (FullBarriers()) {
-            RecordFullBarrier(cmdbuf);
-        }
-        cmdbuf.beginRendering(info);
     });
     if (rendering_observer) {
         rendering_observer->OnBeginRendering();
@@ -205,11 +258,23 @@ void Scheduler::EndRendering() {
         rendering_observer->OnEndRendering();
     }
     is_rendering = false;
-    Record([](vk::CommandBuffer cmdbuf) {
-        cmdbuf.endRendering();
-        if (FullBarriers()) {
-            RecordFullBarrier(cmdbuf);
+    native_secondary_current_scope = false;
+    if (native_secondary_enabled) {
+        // The next graphics pass may execute on a different primary/secondary.
+        // Never reuse cached binding state across separate command buffers.
+        dynamic_state.Invalidate();
+        vertex_input_state.Invalidate();
+    }
+    const unsigned native_lane = parallel_lane;
+    RecordPrimary([this, native_lane](vk::CommandBuffer primary) {
+        auto& scope = native_secondary_scopes[native_lane];
+        if (scope.active) {
+            Check(scope.buffer.end());
+            primary.executeCommands(scope.buffer);
+            scope = {};
         }
+        primary.endRendering();
+        if (FullBarriers()) RecordFullBarrier(primary);
     });
 }
 
