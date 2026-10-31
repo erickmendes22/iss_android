@@ -57,7 +57,11 @@ class VertexInputTests(unittest.TestCase):
         self.assertIn("dynamic_states.push_back(vk::DynamicState::eVertexInputEXT)", graphics)
         self.assertIn("auto square_info = pipeline_info", graphics)
         scene = (GPU / "video_core/renderer_vulkan/vk_scene_resolution.cpp").read_text()
-        invalidated = scene.index("scheduler.InvalidateVertexInput();")
+        invalidated = scene.index("scheduler.InvalidateGuestGraphicsBindings();")
+        header = (GPU / "video_core/renderer_vulkan/vk_scheduler.h").read_text()
+        invalidate = method(header,"void InvalidateGuestGraphicsBindings()")
+        self.assertIn("vertex_input_state.Invalidate();", invalidate)
+        self.assertIn("descriptor_stream_epoch.fetch_add", invalidate)
         recorded = scene.index("scheduler.Record([=]", invalidated)
         self.assertLess(recorded, scene.index("cmd.bindPipeline", recorded))
 
