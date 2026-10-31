@@ -804,6 +804,15 @@ public:
     void RecordVertexInput(std::span<const vk::VertexInputBindingDescription2EXT> bindings,
                            std::span<const vk::VertexInputAttributeDescription2EXT> attributes);
 
+    // A host graphics helper (e.g. depth resampling) writes graphics descriptors
+    // and binds its own pipeline outside Rasterizer. Its commands invalidate
+    // both replay caches even if the same primary buffer is still recording.
+    void InvalidateGuestGraphicsBindings() {
+        CheckOwner(__builtin_return_address(0));
+        descriptor_stream_epoch.fetch_add(1, std::memory_order_relaxed);
+        vertex_input_state.Invalidate();
+    }
+
     /// Call before recording a helper graphics pipeline with static vertex input.
     void InvalidateVertexInput() {
         CheckOwner(__builtin_return_address(0));
