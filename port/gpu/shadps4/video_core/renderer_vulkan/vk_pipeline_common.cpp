@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_common.h"
+#include "video_core/renderer_vulkan/vk_descriptor_replay_memo.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "common/path_util.h"
 #include "video_core/renderer_vulkan/vk_wave_stats.h"
@@ -24,6 +25,27 @@
 #include <mutex>
 
 namespace Vulkan {
+
+namespace {
+using ReplayCache = DescriptorReplayMemo<vk::CommandBuffer, vk::PipelineLayout>;
+ReplayCache& ReplayMemo() {
+    // Scheduler's recording workers each own their command buffer state.
+    static thread_local ReplayCache memo;
+    return memo;
+}
+
+bool UseDescriptorReplay() {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* value = std::getenv("TLG_DESCRIPTOR_REPLAY");
+        return !value || value[0] != '0';
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+} // namespace
 
 Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorHeap& desc_heap_,
                    const Shader::Profile& profile_, vk::PipelineCache pipeline_cache,
@@ -159,6 +181,11 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;
     const vk::PipelineLayout layout = *pipeline_layout;
+    // Capture these before enqueuing the Vulkan callback. A recycled command buffer handle
+    // is NOT evidence of the same recording when the submission tick/epoch differs.
+    const u64 descriptor_tick = scheduler.CurrentTick();
+    const u64 descriptor_epoch = scheduler.DescriptorStreamEpoch();
+    const unsigned bind_slot = IsCompute() ? 1u : 0u;
     const std::span<const vk::WriteDescriptorSet> active_writes{set_writes.data(), count};
     if (descriptor_update_template && count != 0) {
         // A compact, aligned snapshot replaces WriteDescriptorSet copies and pointer patching.
@@ -168,9 +195,19 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
             const auto payload = scheduler.RecordData(std::span<const u64>{words.data(), words.size()});
             const VkDescriptorUpdateTemplate update = *descriptor_update_template;
             const auto push = push_descriptor_template;
-            scheduler.Record([layout, stage_flags, push_data, update, push, payload](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([layout, stage_flags, push_data, update, push, payload,
+                              descriptor_tick, descriptor_epoch, bind_slot](vk::CommandBuffer cmdbuf) {
+                // Skip only the *driver push* for exactly identical resource values. Guest
+                // memory coherency, image transitions and push constants remain untouched.
                 cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
-                push(cmdbuf, update, layout, 0, payload.data());
+                const bool must_push = !UseDescriptorReplay() ||
+                    ReplayMemo().NeedsPush(cmdbuf, layout, descriptor_tick, descriptor_epoch,
+                                           bind_slot, payload);
+                if (must_push) {
+                    push(cmdbuf, update, layout, 0, payload.data());
+                } else if (IssBionicPerf::Enabled()) {
+                    IssBionicPerf::descriptor_replay_skipped.fetch_add(1, std::memory_order_relaxed);
+                }
             });
             if (IssBionicPerf::Enabled()) {
                 IssBionicPerf::descriptor_template_calls.fetch_add(1, std::memory_order_relaxed);
@@ -183,7 +220,9 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
     if (IssBionicPerf::Enabled() && count != 0) {
         IssBionicPerf::descriptor_legacy_calls.fetch_add(1, std::memory_order_relaxed);
     }
-    scheduler.Record([layout, stage_flags, push_data](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([layout, stage_flags, push_data, bind_slot](vk::CommandBuffer cmdbuf) {
+        // A non-template path can modify descriptor state; prevent false template hits.
+        ReplayMemo().Invalidate(bind_slot);
         cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
     });
 
