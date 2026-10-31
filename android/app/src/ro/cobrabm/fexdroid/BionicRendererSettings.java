@@ -38,6 +38,7 @@ final class BionicRendererSettings {
   env.put("ISS_VMA_BLOCK_MB",p.getBoolean("renderer_small_blocks",true)?"64":"0");
   // Vulkan recording fast paths. Compare same scene and driver with these OFF/ON.
   env.put("ISS_STAGE_BIND_MEMO",p.getBoolean("renderer_stage_bind_memo",true)?"1":"0");
+  env.put("ISS_FAST_PIPELINE_BIND",p.getBoolean("renderer_fast_pipeline_bind",true)?"1":"0");
   env.put("TLG_DESCRIPTOR_REPLAY",p.getBoolean("renderer_descriptor_replay",true)?"1":"0");
   env.put("TLG_DESCRIPTOR_DELTA",p.getBoolean("renderer_descriptor_delta",false)?"1":"0");
   // Depth-only secondary Vulkan scopes: no guest-engine PM4 bypass yet.
@@ -59,6 +60,11 @@ final class BionicRendererSettings {
   stage.setChecked(p.getBoolean("renderer_stage_bind_memo",true));
   stage.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_stage_bind_memo",on).apply());
   panel.addView(stage);
+  CheckBox fastDraw=new CheckBox(a);
+  fastDraw.setText(AppLanguage.text("Fast Draw: reuse identical pipeline binds","Fast Draw: reutilizar bindings de pipeline idênticos"));
+  fastDraw.setChecked(p.getBoolean("renderer_fast_pipeline_bind",true));
+  fastDraw.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_fast_pipeline_bind",on).apply());
+  panel.addView(fastDraw);
   CheckBox replay=new CheckBox(a);
   replay.setText(AppLanguage.text("Reuse identical Vulkan descriptors","Reutilizar descritores Vulkan idênticos"));
   replay.setChecked(p.getBoolean("renderer_descriptor_replay",true));
