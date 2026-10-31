@@ -50,6 +50,14 @@ bool OcclusionQueries::Begin(VAddr address, u32 num_pairs) {
     if (open.size() >= MaxOpenQueries) {
         return false;
     }
+    // A new guest query must not begin inside a dynamic-rendering scope
+    // whose primary permits only vkCmdExecuteCommands. End that scope first;
+    // OnBeginRendering of the next draw will start a normal primary query.
+    // This preserves query samples rather than issuing vkCmdBeginQuery in an
+    // illegal secondary without inheritedQueries support.
+    if (open.empty() && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
     Cut();
     open.push_back(OpenQuery{
         .address = address,
