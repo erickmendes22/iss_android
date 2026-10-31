@@ -21,6 +21,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_stage_bind_memo.py' -v
           python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_fast_pipeline_bind.py' -v
+          python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_fast_draw_key.py' -v
       - name: Native secondary command-state ordering tests
         run: |
           python3 -m unittest discover -s tools/android/runtime -p 'test_native_pass_graphics_state.py' -v
