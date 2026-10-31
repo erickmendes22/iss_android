@@ -37,6 +37,7 @@ final class BionicRendererSettings {
   env.put("TLG_GC_BATCH_DOWNLOAD",p.getBoolean("renderer_batch_gc",true)?"1":"0");
   env.put("ISS_VMA_BLOCK_MB",p.getBoolean("renderer_small_blocks",true)?"64":"0");
   // Vulkan recording fast paths. Compare same scene and driver with these OFF/ON.
+  env.put("ISS_STAGE_BIND_MEMO",p.getBoolean("renderer_stage_bind_memo",true)?"1":"0");
   env.put("TLG_DESCRIPTOR_REPLAY",p.getBoolean("renderer_descriptor_replay",true)?"1":"0");
   env.put("TLG_DESCRIPTOR_DELTA",p.getBoolean("renderer_descriptor_delta",false)?"1":"0");
   // Depth-only secondary Vulkan scopes: no guest-engine PM4 bypass yet.
@@ -53,6 +54,11 @@ final class BionicRendererSettings {
   String[] keys={"renderer_dynamic_stride","renderer_real_occlusion","renderer_batch_gc","renderer_small_blocks"};
   String[] names={AppLanguage.text("Dynamic compute stride (smoke)","Stride dinâmico de compute (fumaça)"),AppLanguage.text("Real light occlusion","Oclusão real das luzes"),AppLanguage.text("Batched texture write-backs","Gravação de texturas em lote"),AppLanguage.text("Smaller memory blocks","Blocos menores de memória")};
   for(int i=0;i<keys.length;i++){final String key=keys[i];CheckBox control=new CheckBox(a);control.setText(names[i]);control.setChecked(p.getBoolean(key,true));control.setOnCheckedChangeListener((b,on)->p.edit().putBoolean(key,on).apply());panel.addView(control);}
+  CheckBox stage=new CheckBox(a);
+  stage.setText(AppLanguage.text("Stage binding cache without prep workers","Cache de recursos dos estágios sem workers de preparo"));
+  stage.setChecked(p.getBoolean("renderer_stage_bind_memo",true));
+  stage.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_stage_bind_memo",on).apply());
+  panel.addView(stage);
   CheckBox replay=new CheckBox(a);
   replay.setText(AppLanguage.text("Reuse identical Vulkan descriptors","Reutilizar descritores Vulkan idênticos"));
   replay.setChecked(p.getBoolean("renderer_descriptor_replay",true));
