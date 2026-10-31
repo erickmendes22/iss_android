@@ -259,6 +259,11 @@ void Scheduler::EndRendering() {
     }
     is_rendering = false;
     native_secondary_current_scope = false;
+    // Ending a pass can execute Vulkan secondaries on the parent primary.
+    // Vulkan does not preserve descriptor/pipeline state across that execution.
+    // Also conservatively invalidate the optimized graphics replay at every
+    // pass boundary: no resource or shader state crosses an unknown host pass.
+    descriptor_stream_epoch.fetch_add(1, std::memory_order_relaxed);
     if (native_secondary_enabled) {
         // The next graphics pass may execute on a different primary/secondary.
         // Never reuse cached binding state across separate command buffers.
