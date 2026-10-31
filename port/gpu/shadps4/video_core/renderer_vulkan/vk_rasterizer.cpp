@@ -3411,6 +3411,9 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
     if (!match) {
         ++texture_set_why[set.key != key ? 0 : set.generation != generation ? 1 : 3];
         ++texture_set_misses;
+        if (!prepared && IssBionicPerf::Enabled()) {
+            IssBionicPerf::stage_bind_memo_misses.fetch_add(1, std::memory_order_relaxed);
+        }
         set.key = key;
         set.stage = &stage;
         set.count = 0;
@@ -3437,11 +3440,17 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             (upscaler->Enabled() && upscaler->RedirectsSampled(entry.id))) {
             ++texture_set_why[2];
             ++texture_set_misses;
+            if (!prepared && IssBionicPerf::Enabled()) {
+                IssBionicPerf::stage_bind_memo_misses.fetch_add(1, std::memory_order_relaxed);
+            }
             set.generation = ~0ull;
             return false;
         }
     }
     ++texture_set_hits;
+    if (!prepared && IssBionicPerf::Enabled()) {
+        IssBionicPerf::stage_bind_memo_hits.fetch_add(1, std::memory_order_relaxed);
+    }
     // `slot` stays the hit set: BindSamplers reuses the samplers it resolved (SamplerSetMemo).
     for (u32 i = 0; i < count; ++i) {
         const auto& entry = set.entries[i];
