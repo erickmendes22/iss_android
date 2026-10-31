@@ -1190,11 +1190,24 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             ResolveIndexBuffer(index_offset);
         }
     }
-    EmitVertexBuffers();
-    if (is_indexed) {
-        EmitIndexBuffer();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
+    if (!native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
     }
 
+    // The outstanding memory barriers MUST be placed on the primary before
+    // vkCmdBeginRendering, even when secondary Vulkan recording is enabled.
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
@@ -1286,7 +1299,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    // Original path unchanged; Native Passes moves descriptor bindings into
+    // the secondary after vkCmdBeginRendering because the secondary does not
+    // inherit vkCmdBindDescriptorSets/vkCmdPushConstants from the primary.
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
@@ -1294,12 +1312,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, draw_prepared, &state, is_indexed, index_offset, nullptr);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        // Draw-scoped GPU state belongs to the exact command buffer that
+        // executes the draw. In particular, no graphics state is inherited
+        // from its parent primary by a Vulkan secondary command buffer.
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();
@@ -1438,9 +1465,23 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     SubmitIfWorkPiledUp(state);
     scheduler.CountWork();
 
-    BindVertexBuffers(pipeline);
-    if (is_indexed) {
-        BindIndexBuffer();
+    // Use the exact same per-pass eligibility as Scheduler::BeginRendering.
+    // Global NativeSecondaryRequested() previously reordered bindings even
+    // for primary fallbacks, including critical color-output passes.
+    const bool native_graphics = scheduler.WillUseNativeSecondary(state);
+    // Primary fallback binds descriptors/vertex state BEFORE BeginRendering.
+    // If the preceding pass used a secondary buffer, those commands would
+    // otherwise be swallowed by the previous secondary, then the next
+    // primary color pass draws with missing state (blank image).
+    if (!native_graphics && scheduler.IsNativeSecondaryRendering()) {
+        scheduler.EndRendering();
+    }
+    if (native_graphics) {
+        ResolveVertexBuffers(pipeline, nullptr);
+        if (is_indexed) ResolveIndexBuffer(0);
+    } else {
+        BindVertexBuffers(pipeline);
+        if (is_indexed) BindIndexBuffer();
     }
 
     const auto [buffer, base] =
@@ -1473,17 +1514,25 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    pipeline->BindResources(set_writes, set_write_index, push_data);
+    if (!native_graphics) {
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+    }
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
-    UpdateDynamicState(pipeline, is_indexed);
+    if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
         RecordFrameInputs(pipeline, nullptr, &state, is_indexed, 0, &indirect);
     }
     scheduler.BeginRendering(state);
+    if (native_graphics) {
+        EmitVertexBuffers();
+        if (is_indexed) EmitIndexBuffer();
+        pipeline->BindResources(set_writes, set_write_index, push_data);
+        UpdateDynamicState(pipeline, is_indexed);
+    }
 
     ASSERT(stride == (is_indexed ? sizeof(VkDrawIndexedIndirectCommand)
                                  : sizeof(VkDrawIndirectCommand)));
@@ -3756,6 +3805,48 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         state.width = proxy.width;
         state.height = proxy.height;
         target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
+    }
+    // Exact formats inherited by secondary Vulkan commands. The existing
+    // graphics pipeline uses LiverpoolToVK::SurfaceFormat/DepthFormat. Restrict
+    // the pilot to ordinary 1x attachments, no mixed samples or feedback loops.
+    static const bool arm64_native_secondary_requested = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* e = std::getenv("ISS_NATIVE_PASSES_ARM64_SECONDARY");
+        return e && e[0] == '1';
+#else
+        return false;
+#endif
+    }();
+    if (arm64_native_secondary_requested &&
+        state.num_color_attachments <= state.native_color_formats.size() &&
+        key.num_samples == 1 && key.depth_samples <= 1 &&
+        !attachment_feedback_loop) {
+        bool eligible = true;
+        for (u32 i = 0; i < state.num_color_attachments; ++i) {
+            if (!state.color_attachments[i].image_view) {
+                // A native secondary must not assume an attachment that is
+                // absent even when the graphics pipeline has a format for it.
+                eligible = false;
+                state.native_color_formats[i] = vk::Format::eUndefined;
+                continue;
+            }
+            if (key.color_samples[i] > 1) eligible = false;
+            const auto& buffer = key.color_buffers[i];
+            state.native_color_formats[i] = instance.GetSupportedFormat(
+                LiverpoolToVK::SurfaceFormat(buffer.data_format, buffer.num_format),
+                vk::FormatFeatureFlagBits2::eColorAttachment);
+        }
+        if (state.depth_stencil_attachment.has_depth ||
+            state.depth_stencil_attachment.has_stencil) {
+            const auto depth_format = instance.GetSupportedFormat(
+                LiverpoolToVK::DepthFormat(key.z_format, key.stencil_format),
+                vk::FormatFeatureFlagBits2::eDepthStencilAttachment);
+            state.native_depth_format =
+                state.depth_stencil_attachment.has_depth ? depth_format : vk::Format::eUndefined;
+            state.native_stencil_format =
+                state.depth_stencil_attachment.has_stencil ? depth_format : vk::Format::eUndefined;
+        }
+        state.native_eligible = eligible ? 1 : 0;
     }
     if (census_on) {
         std::array<const VideoCore::ImageInfo*, AmdGpu::NUM_COLOR_BUFFERS> colors{};
