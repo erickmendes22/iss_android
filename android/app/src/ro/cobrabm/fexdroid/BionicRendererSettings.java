@@ -36,6 +36,15 @@ final class BionicRendererSettings {
   env.put("TLG_OCCLUSION_MODE",p.getBoolean("renderer_real_occlusion",true)?"4":"3");
   env.put("TLG_GC_BATCH_DOWNLOAD",p.getBoolean("renderer_batch_gc",true)?"1":"0");
   env.put("ISS_VMA_BLOCK_MB",p.getBoolean("renderer_small_blocks",true)?"64":"0");
+  // Vulkan recording fast paths. Compare same scene and driver with these OFF/ON.
+  env.put("TLG_DESCRIPTOR_REPLAY",p.getBoolean("renderer_descriptor_replay",true)?"1":"0");
+  env.put("TLG_DESCRIPTOR_DELTA",p.getBoolean("renderer_descriptor_delta",false)?"1":"0");
+  // Depth-only secondary Vulkan scopes: no guest-engine PM4 bypass yet.
+  // Color-attachment secondaries previously produced missing output; never enable
+  // them from the ordinary Android UI.
+  env.put("ISS_NATIVE_PASSES_ARM64_SECONDARY",
+      p.getBoolean("renderer_native_secondary_depth",false)?"1":"0");
+  env.put("ISS_NATIVE_PASSES_ARM64_COLOR_PASSES","0");
  }
  static void show(Activity a){
   SharedPreferences p=a.getSharedPreferences("iss",0);
@@ -44,6 +53,21 @@ final class BionicRendererSettings {
   String[] keys={"renderer_dynamic_stride","renderer_real_occlusion","renderer_batch_gc","renderer_small_blocks"};
   String[] names={AppLanguage.text("Dynamic compute stride (smoke)","Stride dinâmico de compute (fumaça)"),AppLanguage.text("Real light occlusion","Oclusão real das luzes"),AppLanguage.text("Batched texture write-backs","Gravação de texturas em lote"),AppLanguage.text("Smaller memory blocks","Blocos menores de memória")};
   for(int i=0;i<keys.length;i++){final String key=keys[i];CheckBox control=new CheckBox(a);control.setText(names[i]);control.setChecked(p.getBoolean(key,true));control.setOnCheckedChangeListener((b,on)->p.edit().putBoolean(key,on).apply());panel.addView(control);}
+  CheckBox replay=new CheckBox(a);
+  replay.setText(AppLanguage.text("Reuse identical Vulkan descriptors","Reutilizar descritores Vulkan idênticos"));
+  replay.setChecked(p.getBoolean("renderer_descriptor_replay",true));
+  replay.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_descriptor_replay",on).apply());
+  panel.addView(replay);
+  CheckBox delta=new CheckBox(a);
+  delta.setText(AppLanguage.text("Partial descriptor updates (experimental)","Atualizações parciais de descritores (experimental)"));
+  delta.setChecked(p.getBoolean("renderer_descriptor_delta",false));
+  delta.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_descriptor_delta",on).apply());
+  panel.addView(delta);
+  CheckBox secondary=new CheckBox(a);
+  secondary.setText(AppLanguage.text("Vulkan secondary passes: depth only (experimental)","Passes Vulkan secundários: apenas profundidade (experimental)"));
+  secondary.setChecked(p.getBoolean("renderer_native_secondary_depth",false));
+  secondary.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_native_secondary_depth",on).apply());
+  panel.addView(secondary);
   new AlertDialog.Builder(a).setTitle(AppLanguage.text("Renderer corrections","Correções da renderização")).setView(panel).setPositiveButton(AppLanguage.text("Done","Concluir"),null).show();
  }
 }
