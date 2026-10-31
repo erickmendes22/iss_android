@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <span>
 #include <thread>
@@ -39,6 +40,18 @@ bool UseDescriptorReplay() {
     static const bool enabled = [] {
         const char* value = std::getenv("TLG_DESCRIPTOR_REPLAY");
         return !value || value[0] != '0';
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+bool UseDescriptorDelta() {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* value = std::getenv("TLG_DESCRIPTOR_DELTA");
+        return value && value[0] == '1';
     }();
     return enabled;
 #else
@@ -195,18 +208,84 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
             const auto payload = scheduler.RecordData(std::span<const u64>{words.data(), words.size()});
             const VkDescriptorUpdateTemplate update = *descriptor_update_template;
             const auto push = push_descriptor_template;
+            const auto* template_data = &descriptor_template_data;
             scheduler.Record([layout, stage_flags, push_data, update, push, payload,
-                              descriptor_tick, descriptor_epoch, bind_slot](vk::CommandBuffer cmdbuf) {
-                // Skip only the *driver push* for exactly identical resource values. Guest
-                // memory coherency, image transitions and push constants remain untouched.
+                              descriptor_tick, descriptor_epoch, bind_slot, bind_point,
+                              template_data](vk::CommandBuffer cmdbuf) {
+                // Resource coherency and image barriers were handled on the CPU thread.
+                // This only reduces redundant Vulkan descriptor driver work.
                 cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
-                const bool must_push = !UseDescriptorReplay() ||
-                    ReplayMemo().NeedsPush(cmdbuf, layout, descriptor_tick, descriptor_epoch,
-                                           bind_slot, payload);
-                if (must_push) {
+                bool push_full = true;
+                bool unchanged = false;
+                if (UseDescriptorReplay()) {
+                    auto& memo = ReplayMemo();
+                    const auto& slots = template_data->slots;
+                    if (UseDescriptorDelta() && slots.size() <= 128) {
+                        std::array<ReplayCache::ByteRange, 128> ranges{};
+                        std::array<std::uint8_t, 128> selected{};
+                        for (std::size_t i = 0; i < slots.size(); ++i) {
+                            ranges[i] = {slots[i].offset, slots[i].count * slots[i].stride};
+                        }
+                        const auto decision = memo.Select(
+                            cmdbuf, layout, descriptor_tick, descriptor_epoch, bind_slot, payload,
+                            std::span<const ReplayCache::ByteRange>{ranges.data(), slots.size()},
+                            std::span<std::uint8_t>{selected.data(), slots.size()});
+                        if (decision.mode == ReplayCache::Mode::Unchanged) {
+                            push_full = false;
+                            unchanged = true;
+                        } else if (decision.mode == ReplayCache::Mode::Partial) {
+                            // vkCmdPushDescriptorSetKHR updates only the listed bindings,
+                            // preserving the others in this same push-descriptor layout.
+                            std::array<vk::WriteDescriptorSet, 16> changes{};
+                            const auto* bytes =
+                                reinterpret_cast<const std::byte*>(payload.data());
+                            for (std::size_t j = 0; j < decision.changed; ++j) {
+                                const auto& slot = slots[selected[j]];
+                                auto& write = changes[j];
+                                write.dstSet = VK_NULL_HANDLE;
+                                write.dstBinding = slot.binding;
+                                write.dstArrayElement = 0;
+                                write.descriptorCount = slot.count;
+                                write.descriptorType = static_cast<vk::DescriptorType>(slot.type);
+                                const auto* value = bytes + slot.offset;
+                                switch (slot.payload) {
+                                case DescriptorPayload::Buffer:
+                                    write.pBufferInfo =
+                                        reinterpret_cast<const vk::DescriptorBufferInfo*>(value);
+                                    break;
+                                case DescriptorPayload::Image:
+                                    write.pImageInfo =
+                                        reinterpret_cast<const vk::DescriptorImageInfo*>(value);
+                                    break;
+                                case DescriptorPayload::Texel:
+                                    write.pTexelBufferView =
+                                        reinterpret_cast<const vk::BufferView*>(value);
+                                    break;
+                                }
+                            }
+                            cmdbuf.pushDescriptorSetKHR(
+                                bind_point, layout, 0,
+                                std::span<const vk::WriteDescriptorSet>{changes.data(),
+                                                                         decision.changed});
+                            push_full = false;
+                            if (IssBionicPerf::Enabled()) {
+                                IssBionicPerf::descriptor_delta_partial.fetch_add(
+                                    1, std::memory_order_relaxed);
+                                IssBionicPerf::descriptor_delta_bindings.fetch_add(
+                                    decision.changed, std::memory_order_relaxed);
+                            }
+                        }
+                    } else {
+                        unchanged = !memo.NeedsPush(
+                            cmdbuf, layout, descriptor_tick, descriptor_epoch, bind_slot, payload);
+                        push_full = !unchanged;
+                    }
+                }
+                if (push_full) {
                     push(cmdbuf, update, layout, 0, payload.data());
-                } else if (IssBionicPerf::Enabled()) {
-                    IssBionicPerf::descriptor_replay_skipped.fetch_add(1, std::memory_order_relaxed);
+                } else if (unchanged && IssBionicPerf::Enabled()) {
+                    IssBionicPerf::descriptor_replay_skipped.fetch_add(1,
+                                                                      std::memory_order_relaxed);
                 }
             });
             if (IssBionicPerf::Enabled()) {
