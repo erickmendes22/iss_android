@@ -28,7 +28,8 @@
 namespace Vulkan {
 
 namespace {
-using ReplayCache = DescriptorReplayMemo<vk::CommandBuffer, vk::PipelineLayout>;
+using ReplayCache = DescriptorReplayMemo<vk::CommandBuffer, vk::PipelineLayout,
+                                         VkDescriptorUpdateTemplate>;
 ReplayCache& ReplayMemo() {
     // Scheduler's recording workers each own their command buffer state.
     static thread_local ReplayCache memo;
@@ -227,7 +228,7 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                             ranges[i] = {slots[i].offset, slots[i].count * slots[i].stride};
                         }
                         const auto decision = memo.Select(
-                            cmdbuf, layout, descriptor_tick, descriptor_epoch, bind_slot, payload,
+                            cmdbuf, layout, update, descriptor_tick, descriptor_epoch, bind_slot, payload,
                             std::span<const ReplayCache::ByteRange>{ranges.data(), slots.size()},
                             std::span<std::uint8_t>{selected.data(), slots.size()});
                         if (decision.mode == ReplayCache::Mode::Unchanged) {
@@ -277,7 +278,7 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                         }
                     } else {
                         unchanged = !memo.NeedsPush(
-                            cmdbuf, layout, descriptor_tick, descriptor_epoch, bind_slot, payload);
+                            cmdbuf, layout, update, descriptor_tick, descriptor_epoch, bind_slot, payload);
                         push_full = !unchanged;
                     }
                 }
