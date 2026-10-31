@@ -774,7 +774,14 @@ public:
         // Raw callers may bind a graphics pipeline with static vertex input. Even if
         // already in direct mode, do not reuse state across an untracked command stream.
         vertex_input_state.Invalidate();
+        // Raw Vulkan callers may rebind push descriptors behind the renderer's back.
+        descriptor_stream_epoch.fetch_add(1, std::memory_order_relaxed);
         return current_cmdbuf;
+    }
+
+    /// Changes when an untracked raw Vulkan user can alter descriptor bindings.
+    [[nodiscard]] u64 DescriptorStreamEpoch() const noexcept {
+        return descriptor_stream_epoch.load(std::memory_order_relaxed);
     }
 
     /// Records dynamic vertex format only when changed. Buffer addresses remain per draw.
@@ -1018,6 +1025,7 @@ private:
     VertexInputState vertex_input_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
+    std::atomic<u64> descriptor_stream_epoch{1};
     std::condition_variable_any event_cv;
     struct PendingOp {
         Common::UniqueFunction<void> callback;
