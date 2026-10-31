@@ -27,7 +27,7 @@ int main() {
     const auto yes = [&](std::uint64_t cb, std::uint64_t layout,
                          std::uint64_t tick, std::uint64_t epoch, unsigned bind,
                          const auto& payload) {
-        return memo.NeedsPush(cb, layout, tick, epoch, bind, std::span(payload));
+        return memo.NeedsPush(cb, layout, 77, tick, epoch, bind, std::span(payload));
     };
     if (!yes(1, 5, 11, 1, 0, one)) return 1;
     if (yes(1, 5, 11, 1, 0, one)) return 2; // exact replay
@@ -56,7 +56,7 @@ int main() {
     const std::array<std::uint64_t, 4> second{1, 22, 3, 4};
     const std::array<std::uint64_t, 4> changed_all{10, 20, 30, 40};
     auto plan = [&](auto cb, auto layout, auto epoch, const auto& payload) {
-        return delta.Select(cb, layout, 100, epoch, 0, std::span(payload),
+        return delta.Select(cb, layout, 77, 100, epoch, 0, std::span(payload),
                             std::span(bindings), std::span(selected));
     };
     if (plan(1, 2, 1, first).mode != Cache::Mode::Full) return 14;
@@ -67,6 +67,9 @@ int main() {
     if (plan(1, 2, 2, second).mode != Cache::Mode::Full) return 18;
     if (plan(1, 3, 2, second).mode != Cache::Mode::Full) return 19;
     if (plan(2, 3, 2, second).mode != Cache::Mode::Full) return 20;
+    if (delta.Select(2, 3, 78, 100, 2, 0, std::span(second),
+                     std::span(bindings), std::span(selected)).mode != Cache::Mode::Full) return 21;
+    if (!memo.NeedsPush(2, 6, 78, 12, 2, 0, std::span(two))) return 22;
     return 0;
 }
 """
