@@ -50,3 +50,28 @@ resolution patches, and UI unchanged. No game shader recompiler change occurs.
 This fixes a concrete resource-lifetime defect. Full-device confirmation of
 facial quality is still required; the missing pre-overwrite object map cannot
 be recovered from the two existing frames and must not be invented offline.
+
+## Continuation: stop CPU motion preparation at the same boundary
+
+The seal previously blocked `PrepareDraw` and the motion attachment, but the
+rasterizer still hashed vertex buffers, scanned/hashed indices, read bone
+palettes and called `History::Moving` before reaching the blocked method.
+`Moving` mutates gate occurrence/history tables, so those tables were not
+actually sealed with opaque geometry. Late work could not produce useful
+motion output, yet still consumed CPU time and changed bookkeeping.
+
+`ObjectMotion::Collecting` now gates that CPU preparation and `Moving` itself.
+Every draw first publishes motion parameter zero, so skipping a late pass
+cannot reuse an earlier draw's motion parameter. The existing null motion
+attachment, opaque depth/motion images, game draw, resource bindings and
+Vulkan synchronization are preserved. No shader, jitter, sharpening, Readback
+mode, resolution or FSR SDK setting changes.
+
+The regression compiles the production inline methods with the real motion
+history implementation. It exercises 1,000 late draws, frame rollover,
+opaque palette changes, unmatched repeated instances and disabled collection.
+Late draws must leave history statistics unchanged and cannot become a
+second occurrence's history in the next frame. Structural guards also cover
+neutral parameters before early-out and both expensive hash/scan entry paths.
+This removes provably unused CPU work; it is not an FPS measurement or proof
+that capture 25's remaining facial reconstruction is visually resolved.

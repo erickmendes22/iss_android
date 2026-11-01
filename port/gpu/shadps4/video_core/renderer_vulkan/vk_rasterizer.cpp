@@ -1244,7 +1244,11 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    if (motion_draw && motion_geometry) {
+    // A sealed scene must publish neutral motion for this draw. Do not inherit
+    // an earlier opaque draw's parameter if the late pass skips preparation.
+    push_data.motion_param = 0;
+    if (motion_draw && motion_geometry && object_motion->Collecting() &&
+        !TlgToggle::Disabled(1u << 29)) {
         const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
         const auto [base_vertex, first_instance] =
             GetDrawOffsets(regs, vs, pipeline->GetFetchShader());
@@ -1279,7 +1283,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                                                palette);
             }
         }
-        push_data.motion_param = 0;
         if (!gated || object_motion->Moving({.shader = vs.pgm_hash,
                                              .geometry = motion_geometry,
                                              .indices = index_address,
@@ -2480,7 +2483,8 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
         // If there are no bindings, there is nothing further to do.
         return;
     }
-    if (motion_draw && !guest_buffers.empty()) {
+    if (motion_draw && object_motion->Collecting() && !TlgToggle::Disabled(1u << 29) &&
+        !guest_buffers.empty()) {
         // Include every stream: identical position buffers can be paired with different
         // skinning/instance data. Index topology and base offsets are matched separately.
         motion_geometry = ready ? ready->buffers_hash
