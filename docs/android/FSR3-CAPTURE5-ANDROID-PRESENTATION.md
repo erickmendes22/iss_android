@@ -88,3 +88,23 @@ fixture rejects partial copies, missing completion, wrong Android frame IDs
 and mismatched SDK serials. CI compiles the complete Android C/C++ integration.
 
 This extends diagnosis; it is not a claimed correction of the remaining tremor.
+
+## GPU-to-host readback visibility correction
+
+The capture helpers previously waited for GPU completion and invalidated mapped
+CPU memory, but omitted the TransferWrite-to-HostRead memory-domain dependency.
+This does not establish a rendering defect; it weakens the guaranteed validity
+of the diagnostic readbacks. Add a staging-buffer barrier after every image
+copy and before its deferred host read, keeping the existing completion waits,
+VMA invalidation and image-reuse barriers. No render-image policy is changed.
+The same dependency is included in the offline replay transfer helper before
+using it to compare candidate rendering changes.
+
+Khronos specifies the required device-write / host-read barrier / completion
+wait / cache-invalidation chain:
+https://docs.vulkan.org/refpages/latest/refpages/source/vkInvalidateMappedMemoryRanges.html
+
+The production barrier helper is compiled against Vulkan-Hpp. A mock dispatch
+verifies transfer-write to host-read scopes, exact buffer/range, ignored queue
+families and placement before deferred reads in BOTH capture helpers. This
+corrects the diagnostic contract; it must not be presented as a device tremor fix.

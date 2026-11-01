@@ -210,3 +210,41 @@ int main(){
    p=Path(tmp);(p/'test.cpp').write_text(code)
    subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I',str(ROOT/'tools/android/present'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
    subprocess.run([str(p/'test')],check=True)
+
+ def test_device_writes_are_made_visible_to_host_before_deferred_reads(self):
+  compiler=shutil.which('c++');candidates=[ROOT/'port/gpu/third_party/vulkan-headers/include',Path('/usr/include'),ROOT.parent/'replay-deps/root/usr/include']
+  include=next((p for p in candidates if (p/'vulkan/vulkan.hpp').is_file()),None)
+  if not compiler or include is None:self.skipTest('Vulkan-Hpp and C++ compiler required')
+  directory=ROOT/'port/gpu/shadps4/video_core/renderer_vulkan'
+  for file,signature in [('vk_presenter.cpp','static bool DumpRaw('),('vk_temporal_upscaler.cpp','void DumpImages(')]:
+   code=method((directory/file).read_text(),signature)
+   self.assertLess(code.index('copyImageToBuffer'),code.index('CaptureHostReadBarrier('))
+   self.assertLess(code.index('CaptureHostReadBarrier('),code.index('DeferPriorityOperation('))
+  code=r'''
+#define VULKAN_HPP_NO_CONSTRUCTORS
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#include <vulkan/vulkan.hpp>
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+#include <cassert>
+#include <cstdint>
+#include "vk_capture_host_read.h"
+static unsigned called=0;
+static VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer,const VkDependencyInfo* info){
+ assert(info->bufferMemoryBarrierCount==1&&info->memoryBarrierCount==0&&info->imageMemoryBarrierCount==0);
+ const auto& b=info->pBufferMemoryBarriers[0];
+ assert(b.srcStageMask==VK_PIPELINE_STAGE_2_TRANSFER_BIT&&b.srcAccessMask==VK_ACCESS_2_TRANSFER_WRITE_BIT);
+ assert(b.dstStageMask==VK_PIPELINE_STAGE_2_HOST_BIT&&b.dstAccessMask==VK_ACCESS_2_HOST_READ_BIT);
+ assert(b.srcQueueFamilyIndex==VK_QUEUE_FAMILY_IGNORED&&b.dstQueueFamilyIndex==VK_QUEUE_FAMILY_IGNORED);
+ assert(b.buffer==reinterpret_cast<VkBuffer>(uintptr_t(77))&&b.offset==0&&b.size==1234);++called;
+}
+int main(){
+ VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier2=barrier;
+ Vulkan::CaptureHostReadBarrier(vk::CommandBuffer{reinterpret_cast<VkCommandBuffer>(uintptr_t(1))},
+  vk::Buffer{reinterpret_cast<VkBuffer>(uintptr_t(77))},1234);
+ assert(called==1);
+}
+'''
+  with tempfile.TemporaryDirectory() as tmp:
+   p=Path(tmp);(p/'test.cpp').write_text(code)
+   subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I',str(include),'-I',str(directory),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+   subprocess.run([str(p/'test')],check=True)

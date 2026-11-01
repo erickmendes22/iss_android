@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_capture_host_read.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -158,6 +159,7 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
             .imageExtent = {image.width, image.height, 1},
         };
         cmdbuf.copyImageToBuffer(image.image, vk::ImageLayout::eGeneral, buffer, region);
+        CaptureHostReadBarrier(cmdbuf, vk::Buffer(buffer), size);
         char path[512];
         std::snprintf(path, sizeof(path), "%s/f%03d_%s_%ux%u_%s.raw", dir.c_str(), frame,
                       image.name, image.width, image.height, image.format);

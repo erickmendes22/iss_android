@@ -22,6 +22,7 @@
 #include "tlg_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_capture_host_read.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
@@ -448,6 +449,7 @@ static bool DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
                              vk::BufferImageCopy{.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
                                                  .imageOffset = {s32(offset_x), s32(offset_y), 0},
                                                  .imageExtent = {w, h, 1}});
+    CaptureHostReadBarrier(cmdbuf, vk::Buffer(buffer), buffer_ci.size);
     const char* dir = std::getenv("TLG_DUMP_DIR");
     char path[512];
     if (trace)
