@@ -79,7 +79,23 @@ public class CaptureExportTest {
   int objectCount=0;
   try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(objectBytes.toByteArray()))){for(ZipEntry e;(e=z.getNextEntry())!=null;){if(e.getName().contains("_object_motion_")){assert e.getName().endsWith("_rgba32f.raw");assert z.readAllBytes().length==64;objectCount++;}z.closeEntry();}}
   assert objectCount==2;
-  System.out.println("PASS: AA and all SDK stages survive ZIP; partial and wrongly encoded SDK stages rejected");
+  // Sequence export must wait for every complete GPU output and metadata file.
+  Files.write(new File(dir,"f000_trace_info.txt").toPath(),"trace_frames=120\n".getBytes("UTF-8"));
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  for(int f=0;f<120;f++){
+   String p=String.format("f%03d_",f);
+   file(dir,p+"trace_output_2x2_rgba.raw",16);
+   Files.write(new File(dir,p+"trace_info.txt").toPath(),"trace_frames=120\n".getBytes("UTF-8"));
+  }
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // no final stage
+  file(dir,"f000_trace_present_2x2_bgra.raw",16);
+  assert FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // skipped presentations allowed
+  file(dir,"f119_trace_output_2x2_rgba.raw",15);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f119_trace_output_2x2_rgba.raw",16);
+  assert FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  assert FsrCaptureFiles.captureName("f119_trace_present_640x360_rgba.raw");
+  System.out.println("PASS: complete SDK pair and bounded sequence survive export; partial sequence rejected");
  }
 }
 '''
@@ -102,7 +118,7 @@ public class CaptureExportTest {
  def test_raw_object_capture_is_bounded_and_only_on_request(self):
   code=(ROOT/'port/gpu/shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp').read_text()
   block=code[code.index('void TemporalUpscaler::RunScaled()'):code.index('vk::ImageView TemporalUpscaler::Mirror')]
-  at=block.index('if (const int dump = DumpFrame(); dump >= 0)')
+  at=block.index('const int dump = DumpFrame();')
   self.assertNotIn('"object_motion", "rgba32f"',block[:at])
   self.assertIn('u64(w) * h * 16 <= 20000000',block[at:])
   self.assertIn('camera_motion.ObjectMotionImage(w, h)',block[at:])

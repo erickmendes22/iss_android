@@ -114,6 +114,7 @@ struct DumpImage {
     const char* name;
     const char* format;
     vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor;
+    u32 offset_x = 0, offset_y = 0;
 };
 
 /// Copies `images` into host buffers after the commands recorded so far and writes them to
@@ -153,6 +154,7 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
         }
         const vk::BufferImageCopy region{
             .imageSubresource = {image.aspect, 0, 0, 1},
+            .imageOffset = {int(image.offset_x), int(image.offset_y), 0},
             .imageExtent = {image.width, image.height, 1},
         };
         cmdbuf.copyImageToBuffer(image.image, vk::ImageLayout::eGeneral, buffer, region);
@@ -2218,6 +2220,7 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
 
 void TemporalUpscaler::RunScaled() {
 #ifdef ISS_ANDROID_BIONIC
+    iss_capture_sample = {};
     // Report what was actually rasterized, including the zero-jitter discovery
     // frame. Never tell FSR to undo a Halton shift absent from its input.
     const auto jitter = IssGeometryJitter(camera_motion.Depth());
@@ -2661,7 +2664,9 @@ void TemporalUpscaler::RunScaled() {
         // Capture a *user-requested*, bounded pair of frames, including exactly
         // the images consumed by the SDK, so loss of detail can be located
         // before vs. during temporal reconstruction. No GPU readback otherwise.
-        if (const int dump = DumpFrame(); dump >= 0) {
+        const int dump = DumpFrame();
+        if (dump == 0) iss_temporal_capture.Begin();
+        if (dump >= 0) {
             // RecordMotion already called ObjectMotion::PrepareRead: this image
             // is General. Keep RG/valid/depth unchanged to distinguish missing
             // facial history from a vector rejected by the depth/outlier guard.
@@ -2703,6 +2708,29 @@ void TemporalUpscaler::RunScaled() {
                 runtime.FlushBarriers();
                 DumpImages(instance, scheduler, cmdbuf, dump,
                            {{pre.GetImage(), w, h, encoding.bytes, "aa_before_fxaa", encoding.name}});
+            }
+        }
+        iss_capture_sample = iss_temporal_capture.Advance();
+        if (iss_capture_sample.index >= 0) {
+            const auto crop = IssTemporalCapture::Center(ow, oh);
+            DumpImages(instance, scheduler, cmdbuf, iss_capture_sample.index,
+                       {{vk::Image(ui_image), crop.width, crop.height, 4, "trace_output", "rgba",
+                         vk::ImageAspectFlagBits::eColor, crop.x, crop.y}});
+            const char* dir = std::getenv("TLG_DUMP_DIR");
+            char path[512];
+            std::snprintf(path, sizeof(path), "%s/f%03d_trace_info.txt",
+                          dir && *dir ? dir : "out/dump", iss_capture_sample.index);
+            if (FILE* f = std::fopen(path, "wb")) {
+                const auto now = std::chrono::steady_clock::now().time_since_epoch();
+                std::fprintf(f, "trace_frames=%d\nserial=%llu\nsteady_ns=%lld\ndispatch_frame_id=%llu\n"
+                                "dispatch_reset=%u\njitter=%.9g,%.9g\nframe_time_ms=%.9g\n"
+                                "output_extent=%ux%u\ncrop=%u,%u,%u,%u\n",
+                             IssTemporalCapture::Frames, (unsigned long long)iss_capture_sample.serial,
+                             (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(),
+                             (unsigned long long)info.frameId, unsigned(info.reset),
+                             info.jitterOffset.x, info.jitterOffset.y, info.frameTimeMilliseconds,
+                             ow, oh, crop.x, crop.y, crop.width, crop.height);
+                std::fclose(f);
             }
         }
 #endif
@@ -2804,6 +2832,9 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
         cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
     });
     display.valid = true;
+#ifdef ISS_ANDROID_BIONIC
+    display.capture_sample = iss_capture_sample;
+#endif
     target = {Mirror(vk::Image(display.image), display.views, view_info.format, {}),
               vk::ImageLayout::eGeneral, ui_width, ui_height};
     return true;
@@ -2855,6 +2886,22 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
         return false;
     }
     display = {vk::Image(it->second.image), it->second.format, it->second.width, it->second.height};
+#ifdef ISS_ANDROID_BIONIC
+    // The token travels with this display image, not a global "latest frame".
+    // Repeated presentation of the same image must not duplicate/overwrite samples.
+    auto& captured = it->second;
+    if (captured.capture_sample.index >= 0 &&
+        captured.captured_serial != captured.capture_sample.serial) {
+        captured.captured_serial = captured.capture_sample.serial;
+        scheduler.EndRendering();
+        const auto crop = IssTemporalCapture::Center(display.width, display.height);
+        const bool bgra = display.format == vk::Format::eB8G8R8A8Unorm ||
+                          display.format == vk::Format::eB8G8R8A8Srgb;
+        DumpImages(instance, scheduler, scheduler.CommandBuffer(), captured.capture_sample.index,
+                   {{display.image, crop.width, crop.height, 4, "trace_present", bgra ? "bgra" : "rgba",
+                     vk::ImageAspectFlagBits::eColor, crop.x, crop.y}});
+    }
+#endif
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // TLG_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
     static const char* dump = std::getenv("TLG_PRESENT_DUMP_TRIGGER");

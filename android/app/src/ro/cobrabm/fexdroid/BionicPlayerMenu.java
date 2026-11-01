@@ -49,7 +49,7 @@ final class BionicPlayerMenu {
   HudConfig config=HudConfig.load(hudFile);row("☷","HUD — FPS / GPU / CPU",config.enabled?AppLanguage.text("On", "Ligado"):AppLanguage.text("Off", "Desligado"),()->HudControls.show(activity,hudFile,()->{apply();contents();}));
   row("◈",AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes"),BionicReadbackSettings.summary(activity),()->BionicReadbackSettings.show(activity,this::contents));
   if(activity.getSharedPreferences("iss",0).getBoolean("fsr3",false)){
-   row("▧",AppLanguage.text("Capture FSR3 image (2 frames)", "Capturar imagem FSR3 (2 quadros)"),
+   row("▧",AppLanguage.text("Capture FSR3 sequence", "Capturar sequência FSR3"),
        AppLanguage.text("Input, depth, motion and output — export ZIP in Settings",
                         "Entrada, profundidade, movimento e saída — exporte ZIP nas Config."),
        this::captureFsr3);
@@ -89,8 +89,8 @@ final class BionicPlayerMenu {
    return;
   }
   close();
-  Toast.makeText(activity,AppLanguage.text("FSR capture requested; play normally, then export ZIP in Settings.",
-                                           "Captura FSR solicitada; jogue normalmente e exporte o ZIP nas Config."),
+  Toast.makeText(activity,AppLanguage.text("FSR capture requested; play for 10 seconds, then export ZIP in Settings.",
+                                           "Captura FSR solicitada; jogue por 10 segundos e exporte o ZIP nas Config."),
                  Toast.LENGTH_LONG).show();
  }
  static void controlSettings(Activity a,PadBridge pad,Runnable updated){

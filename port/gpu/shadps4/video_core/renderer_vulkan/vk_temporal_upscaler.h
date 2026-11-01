@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/vk_fsr4.h"
 #ifdef ISS_ANDROID_BIONIC
 #include "video_core/renderer_vulkan/iss_scene_jitter.h"
+#include "video_core/renderer_vulkan/iss_temporal_capture.h"
 #endif
 #include "video_core/texture_cache/image.h"
 
@@ -237,6 +238,8 @@ private:
     struct {u64 address{}; u32 format{}, width{}, height{};} iss_aa_capture;
     bool iss_fsr_used_original_aa{};
     IssSceneJitter iss_scene_jitter;
+    IssTemporalCapture iss_temporal_capture;
+    IssTemporalCapture::Sample iss_capture_sample;
 #endif
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
@@ -303,6 +306,10 @@ private:
                          vk::ComponentMapping mapping);
     std::vector<MirrorView> ui_views;
     struct DisplayImage {
+#ifdef ISS_ANDROID_BIONIC
+        IssTemporalCapture::Sample capture_sample;
+        u64 captured_serial = 0;
+#endif
         VideoCore::UniqueImage image;
         std::vector<MirrorView> views;
         vk::Format format{};
