@@ -1538,10 +1538,18 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     // Only potentially animated G-buffer draws may use the extra motion attachment. The
     // ordinary stage variant is needed first to inspect the vertex shader's resources.
     bool motion_possible = false;
+#ifdef ISS_ANDROID_BIONIC
+    u32 motion_bound_mask = 0;
+#endif
     {
         u32 bound = 0;
         for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
             bound += (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) ? 1 : 0;
+#ifdef ISS_ANDROID_BIONIC
+            if (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) {
+                motion_bound_mask |= 1u << cb;
+            }
+#endif
         }
         motion_possible = Shader::MotionVectors::positions_address != 0 && bound >= 5 &&
                           !regs.color_buffers[Shader::MotionVectors::Output] &&
@@ -1573,6 +1581,13 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     if (!RefreshGraphicsStages(sel)) {
         return false;
     }
+#ifdef ISS_ANDROID_BIONIC
+    // Inspect the ordinary fragment variant BEFORE adding our motion export.
+    // Stale bound MRTs do not make a depth/material auxiliary shader a G-buffer
+    // writer. Such a draw must not overwrite the visible surface's vectors.
+    motion_possible = motion_possible &&
+        Motion::GBufferMotionEligible(motion_bound_mask, key.mrt_mask);
+#endif
     if (motion_possible) {
         const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
         if (vs) {
