@@ -49,6 +49,11 @@ int main(){
   self.assertNotIn('scheduler.Wait(',body)
   scheduler=(ROOT/'port/gpu/shadps4/video_core/renderer_vulkan/vk_scheduler.cpp').read_text()
   end=method(scheduler,'void Scheduler::EndRendering(')
-  self.assertLess(end.index('OnEndRendering()'),end.index('cmdbuf.endRendering()'))
+  # Native secondary mode ends the Vulkan scope on the primary recorder.
+  termination = 'primary.endRendering()' if 'primary.endRendering()' in end else 'cmdbuf.endRendering()'
+  self.assertLess(end.index('OnEndRendering()'),end.index(termination))
+  if termination == 'primary.endRendering()':
+   self.assertIn('primary.executeCommands(scope.buffer)', end)
+   self.assertLess(end.index('primary.executeCommands(scope.buffer)'),end.index(termination))
 
 if __name__=='__main__':unittest.main()

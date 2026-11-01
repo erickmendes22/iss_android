@@ -293,6 +293,12 @@ final class LanguageCatalogTrPl {
   {"FSR Quality","FSR Kalite","FSR Jakość"},
   {"FSR Balanced","FSR Dengeli","FSR Zrównoważony"},
   {"FSR Performance","FSR Performans","FSR Wydajność"},
+  {"Stage binding cache without prep workers","Hazırlık iş parçacıkları olmadan aşama kaynak önbelleği","Pamięć podręczna zasobów etapów bez wątków przygotowania"},
+  {"Fast Draw: reuse shader pipeline selection (experimental)","Fast Draw: gölgelendirici işlem hattı seçimini yeniden kullan (deneysel)","Fast Draw: ponownie użyj wyboru potoku shaderów (eksperymentalne)"},
+  {"Fast Draw: reuse identical pipeline binds","Fast Draw: aynı işlem hattı bağlamalarını yeniden kullan","Fast Draw: ponownie używaj identycznych powiązań potoku"},
+  {"Reuse identical Vulkan descriptors","Aynı Vulkan tanımlayıcılarını yeniden kullan","Ponownie używaj identycznych deskryptorów Vulkan"},
+  {"Partial descriptor updates (experimental)","Kısmi tanımlayıcı güncellemeleri (deneysel)","Częściowe aktualizacje deskryptorów (eksperymentalne)"},
+  {"Vulkan secondary passes: depth only (experimental)","Vulkan ikincil geçişleri: yalnızca derinlik (deneysel)","Dodatkowe przebiegi Vulkan: tylko głębia (eksperymentalne)"},
   };
   for(String[] row:rows)TEXT.put(row[0],new String[]{row[1],row[2]});
  }

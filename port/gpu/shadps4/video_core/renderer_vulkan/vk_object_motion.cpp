@@ -141,12 +141,7 @@ void ObjectMotion::OnFrameStart() {
 }
 
 u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
-#ifdef ISS_ANDROID_BIONIC
-    // Do not let post-lighting passes replace next frame's opaque vertex history,
-    // even though their already-compiled motion pipeline still executes.
-    if (scene_sealed) return 0;
-#endif
-    if (!enabled || TlgToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
+    if (!Collecting() || TlgToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
         return 0;
     }
     const auto allocation = history.Prepare(draw);

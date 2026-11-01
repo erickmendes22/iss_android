@@ -51,7 +51,8 @@ protected:
 
 class CommandPool final : public ResourcePool {
 public:
-    explicit CommandPool(const Instance& instance, Semaphore* work_semaphore);
+    explicit CommandPool(const Instance& instance, Semaphore* work_semaphore,
+                         vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
     ~CommandPool() override;
 
     void Allocate(std::size_t begin, std::size_t end) override;
@@ -60,6 +61,7 @@ public:
 
 private:
     const Instance& instance;
+    vk::CommandBufferLevel level;
     vk::UniqueCommandPool cmd_pool;
     std::vector<vk::CommandBuffer> cmd_buffers;
 };

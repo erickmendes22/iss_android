@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -11,6 +12,14 @@
 #include <vector>
 
 namespace Vulkan::Motion {
+
+// Bound attachments can survive from a preceding G-buffer pass. Only enabled
+// targets that the CURRENT fragment shader actually exports establish a
+// material pass; slot 7 is our auxiliary motion output, never a guest MRT.
+[[nodiscard]] constexpr bool GBufferMotionEligible(uint32_t enabled_targets,
+                                                   uint32_t shader_outputs) {
+    return std::popcount(enabled_targets & shader_outputs & 0x7fu) >= 5;
+}
 
 struct VertexRange {
     uint32_t first{}, count{};
