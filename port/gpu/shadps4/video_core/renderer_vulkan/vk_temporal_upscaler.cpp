@@ -2722,7 +2722,7 @@ void TemporalUpscaler::RunScaled() {
                           dir && *dir ? dir : "out/dump", iss_capture_sample.index);
             if (FILE* f = std::fopen(path, "wb")) {
                 const auto now = std::chrono::steady_clock::now().time_since_epoch();
-                std::fprintf(f, "trace_frames=%d\nserial=%llu\nsteady_ns=%lld\ndispatch_frame_id=%llu\n"
+                std::fprintf(f, "trace_frames=%d\ntrace_ahb_expected=1\nserial=%llu\nsteady_ns=%lld\ndispatch_frame_id=%llu\n"
                                 "dispatch_reset=%u\njitter=%.9g,%.9g\nframe_time_ms=%.9g\n"
                                 "output_extent=%ux%u\ncrop=%u,%u,%u,%u\n",
                              IssTemporalCapture::Frames, (unsigned long long)iss_capture_sample.serial,
@@ -2890,6 +2890,8 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
     // The token travels with this display image, not a global "latest frame".
     // Repeated presentation of the same image must not duplicate/overwrite samples.
     auto& captured = it->second;
+    display.capture_index = captured.capture_sample.index;
+    display.capture_serial = captured.capture_sample.serial;
     if (captured.capture_sample.index >= 0 &&
         captured.captured_serial != captured.capture_sample.serial) {
         captured.captured_serial = captured.capture_sample.serial;

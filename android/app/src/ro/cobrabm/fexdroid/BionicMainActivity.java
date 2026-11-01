@@ -157,6 +157,8 @@ public final class BionicMainActivity extends Activity {
                 "depth: float32 depth, reversed-Z.\n"+
                 "f000/f001 = successive full SDK frames; output includes SDK sharpening.\n"+
                 "trace_output/trace_present: pixel-exact central crops before/after guest display composition; no resize or video compression.\n"+
+                "trace_ahb: pixel-exact central crop after presenter post-process/blit, before overlay and Android ownership handoff.\n"+
+                "presenter_info/android_info: same-frame SDK serial, AHB generation/index, native frame counter, Android geometry, apply/latch/complete times; missing latch time is -1.\n"+
                 "trace_info: 120 requested scene frames, monotonic time, dispatch ID/reset/jitter and crop coordinates. Same-index stages share a frame token; omitted present means it was not presented.\n").getBytes("UTF-8"));
      zip.closeEntry();
      byte[] buf=new byte[65536];

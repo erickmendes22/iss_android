@@ -51,7 +51,7 @@ public:
                     AHardwareBuffer* buffer);
 
     /// Hands buffer `index` to the app. The acquire fence is borrowed (the caller closes it).
-    bool SendFrame(u32 generation, u32 index, u64 frame, u32 width, u32 height, int acquire_fd);
+    bool SendFrame(u32 generation, u32 index, u64 frame, u32 width, u32 height, int acquire_fd, int trace_index = -1);
 
     /// Reads one release: waits up to timeout_ms (0: look only, -1: forever). 1 = got one,
     /// 0 = nothing, -1 = the app closed the connection or the socket failed (logged).

@@ -192,7 +192,7 @@ bool Client::SendBuffer(u32 generation, u32 index, u32 width, u32 height, u32 fo
 }
 
 bool Client::SendFrame(u32 generation, u32 index, u64 frame, u32 width, u32 height,
-                       int acquire_fd) {
+                       int acquire_fd, int trace_index) {
     if (fd < 0) {
         return false;
     }
@@ -200,6 +200,9 @@ bool Client::SendFrame(u32 generation, u32 index, u64 frame, u32 width, u32 heig
     msg.generation = generation;
     msg.index = index;
     msg.frame = frame;
+    if (trace_index >= 0 && trace_index < 120) {
+        msg.format = ISS_PRESENT_TRACE_MAGIC; msg.count = u32(trace_index + 1);
+    }
     msg.width = width;
     msg.height = height;
     std::scoped_lock lock{send_mutex};

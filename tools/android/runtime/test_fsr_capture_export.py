@@ -95,7 +95,24 @@ public class CaptureExportTest {
   file(dir,"f119_trace_output_2x2_rgba.raw",16);
   assert FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
   assert FsrCaptureFiles.captureName("f119_trace_present_640x360_rgba.raw");
-  System.out.println("PASS: complete SDK pair and bounded sequence survive export; partial sequence rejected");
+  // Final-stage captures must agree on the SDK serial and Android native frame.
+  Files.write(new File(dir,"f000_trace_info.txt").toPath(),"trace_frames=120\ntrace_ahb_expected=1\nserial=1\n".getBytes("UTF-8"));
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  Files.write(new File(dir,"f000_presenter_info.txt").toPath(),"serial=1\nframe=42\nahb_status=copied\n".getBytes("UTF-8"));
+  file(dir,"f000_trace_ahb_2x2_rgba.raw",15);
+  Files.write(new File(dir,"f000_android_info.txt").toPath(),"event=receive frame=42 buffer=0\nevent=apply frame=42 txn=1\n".getBytes("UTF-8"));
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  file(dir,"f000_trace_ahb_2x2_rgba.raw",16);
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // completion not received
+  Files.write(new File(dir,"f000_android_info.txt").toPath(),"event=complete frame=43 txn=1\n".getBytes("UTF-8"));
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // wrong native frame
+  Files.write(new File(dir,"f000_android_info.txt").toPath(),"event=complete frame=42 txn=1\n".getBytes("UTF-8"));
+  assert FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  Files.write(new File(dir,"f000_presenter_info.txt").toPath(),"serial=2\nframe=42\nahb_status=copied\n".getBytes("UTF-8"));
+  assert !FsrCaptureFiles.complete(FsrCaptureFiles.select(dir)); // wrong SDK frame
+  Files.write(new File(dir,"f000_presenter_info.txt").toPath(),"serial=1\nframe=42\nahb_status=copied\n".getBytes("UTF-8"));
+  assert FsrCaptureFiles.complete(FsrCaptureFiles.select(dir));
+  System.out.println("PASS: complete SDK pair and AHB/Android stages export with matching frame ownership");
  }
 }
 '''

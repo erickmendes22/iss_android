@@ -21,6 +21,7 @@
 #pragma once
 
 #ifdef __ANDROID__
+#include <array>
 #include <deque>
 #include <vector>
 #include "iss_present_client.h"
@@ -70,6 +71,11 @@ public:
     u32 CurrentIndex() const { return image_index; }
     void SelectImage(u32 index) { image_index = index; }
     u32 Generation() const { return generation; }
+    bool CaptureSupported() const { return capture_supported; }
+    void SetCaptureToken(int index, u64 serial, const char* status, u32 x, u32 y, u32 w, u32 h, u32 frame_w, u32 frame_h) {
+        capture_index = index; capture_serial = serial; capture_status = status;
+        capture_crop = {x, y, w, h}; capture_frame_size = {frame_w, frame_h};
+    }
 
     vk::Image Image() const { return buffers[image_index].image; }
     vk::ImageView ImageView() const { return buffers[image_index].view; }
@@ -139,6 +145,12 @@ private:
     u32 image_index = 0;
     u32 generation = 0;
     u64 frame_counter = 0;
+    bool capture_supported = true;
+    int capture_index = -1;
+    u64 capture_serial = 0;
+    const char* capture_status = "none";
+    std::array<u32, 4> capture_crop{};
+    std::array<u32, 2> capture_frame_size{};
     bool zero_extent = false;
     bool needs_recreation = true;
     bool sync_import_ok = true; ///< importing sync files as semaphores works (else poll them)

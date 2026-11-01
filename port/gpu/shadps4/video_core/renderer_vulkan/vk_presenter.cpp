@@ -428,9 +428,9 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 }
 
 // tlg: raw copy of an image for TLG_FRAME_DUMP_TRIGGER, written once the GPU is done.
-static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+static bool DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
-                    int index) {
+                    int index, u32 offset_x = 0, u32 offset_y = 0, bool trace = false) {
     const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                        .size = VkDeviceSize(w) * h * 4,
                                        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -442,15 +442,18 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     VmaAllocationInfo info{};
     if (vmaCreateBuffer(instance.GetAllocator(), &buffer_ci, &alloc_ci, &buffer, &allocation,
                         &info) != VK_SUCCESS) {
-        return;
+        return false;
     }
     cmdbuf.copyImageToBuffer(image, layout, buffer,
                              vk::BufferImageCopy{.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                                                 .imageOffset = {s32(offset_x), s32(offset_y), 0},
                                                  .imageExtent = {w, h, 1}});
     const char* dir = std::getenv("TLG_DUMP_DIR");
     char path[512];
-    std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name,
-                  index, w, h);
+    if (trace)
+        std::snprintf(path, sizeof(path), "%s/f%03d_%s_%ux%u_rgba.raw", dir && *dir ? dir : "out/dump", index, name, w, h);
+    else
+        std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name, index, w, h);
     scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation, info,
                                       size = buffer_ci.size, file = std::string{path}] {
         vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
@@ -460,7 +463,44 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
         }
         vmaDestroyBuffer(allocator, buffer, allocation);
     });
+    return true;
 }
+
+#ifdef ISS_ANDROID_BIONIC
+// Copy before the existing FOREIGN queue-family handoff, while this queue owns the AHB.
+static void CaptureAhb(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmd,
+                       Swapchain& swapchain, Frame& frame) {
+    if (frame.capture_index < 0 || frame.capture_serial == frame.captured_ahb_serial) return;
+    frame.captured_ahb_serial = frame.capture_serial;
+    const auto extent = swapchain.GetExtent();
+    const auto crop = IssTemporalCapture::Center(extent.width, extent.height);
+    const char* status = "unsupported";
+    if (swapchain.CaptureSupported()) {
+        const vk::ImageMemoryBarrier ready{
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = swapchain.Image(),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, ready);
+        const bool copied = DumpRaw(instance, scheduler, cmd, swapchain.Image(),
+            vk::ImageLayout::eTransferSrcOptimal, crop.width, crop.height, "trace_ahb",
+            frame.capture_index, crop.x, crop.y, true);
+        auto restore = ready;
+        restore.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        restore.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+        restore.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        restore.newLayout = vk::ImageLayout::eTransferDstOptimal;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, restore);
+        status = copied ? "copied" : "allocation_failed";
+    }
+    swapchain.SetCaptureToken(frame.capture_index, frame.capture_serial, status, crop.x, crop.y, crop.width, crop.height, frame.width, frame.height);
+}
+#endif
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
@@ -494,6 +534,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
 
     Frame* frame = GetRenderFrame();
+#ifdef ISS_ANDROID_BIONIC
+    frame->capture_index = upscaled ? display.capture_index : -1;
+    frame->capture_serial = upscaled ? display.capture_serial : 0;
+#endif
 
     const auto frame_subresources = vk::ImageSubresourceRange{
         .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -641,6 +685,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     // Request a free presentation frame.
     Frame* frame = GetRenderFrame();
+#ifdef ISS_ANDROID_BIONIC
+    frame->capture_index = -1;
+    frame->capture_serial = 0;
+#endif
 
     auto& scheduler = present_thread ? present_scheduler : draw_scheduler;
     scheduler.EndRendering();
@@ -876,6 +924,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                {}, {}, pre_barriers);
         BlitPresentedFrame(cmdbuf, frame->image, swapchain_image, frame->width, frame->height,
                            extent, color_range);
+#ifdef ISS_ANDROID_BIONIC
+        if (!is_reusing_frame) CaptureAhb(instance, scheduler, cmdbuf, swapchain, *frame);
+#endif
         // tlg: the settings menu / FPS counter over the frame, at display resolution.
         const bool overlay = TlgOverlay::Visible();
         const std::array post_barriers{
@@ -1211,6 +1262,9 @@ bool Presenter::PresentWithLsfg(Frame* frame) {
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
         BlitPresentedFrame(cmdbuf, frame->image, dst, frame->width, frame->height,
                            extent, color_range);
+#ifdef ISS_ANDROID_BIONIC
+        CaptureAhb(instance, scheduler, cmdbuf, swapchain, *frame);
+#endif
         // 游戏内设置菜单叠加层与直通路径一致（显示分辨率）。
         const bool overlay = TlgOverlay::Visible();
         const std::array post_barriers{

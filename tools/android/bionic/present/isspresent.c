@@ -59,6 +59,8 @@
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <stdatomic.h>
+#include <stdarg.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +91,7 @@ static struct {
     int (*prev_release_fence)(ASurfaceTransactionStats*, ASurfaceControl*);
     void (*get_controls)(ASurfaceTransactionStats*, ASurfaceControl***, size_t*);
     void (*release_controls)(ASurfaceControl**);
+    int64_t (*get_latch_time)(ASurfaceTransactionStats*);
     void (*set_frame_rate)(ASurfaceTransaction*, ASurfaceControl*, float, int8_t); /* API 30, optional */
     int ok;
 } api;
@@ -113,6 +116,7 @@ static void load_api(void) {
     SYM(get_controls, "ASurfaceTransactionStats_getASurfaceControls");
     SYM(release_controls, "ASurfaceTransactionStats_releaseASurfaceControls");
 #undef SYM
+    *(void**)&api.get_latch_time = dlsym(lib, "ASurfaceTransactionStats_getLatchTime");
     api.ok = 1;
 }
 
@@ -148,8 +152,25 @@ static struct {
     uint32_t generation;
     uint32_t count;
     AHardwareBuffer* bufs[ISS_PRESENT_MAX_BUFFERS];
+    int trace_indices[ISS_PRESENT_MAX_BUFFERS];
+    uint64_t trace_frames[ISS_PRESENT_MAX_BUFFERS];
     atomic_ullong frames;
 } S = {.lock = PTHREAD_MUTEX_INITIALIZER, .server_fd = -1, .conn_fd = -1, .last_set = -1, .wake_fd = -1};
+
+/* Requested capture only; S.lock serializes apply/complete file writes. */
+static int64_t trace_clock_ns(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+static void trace_event(int index, const char* format, ...) {
+    if (index < 0 || index >= 120) return;
+    const char* slash = strrchr(S.path, '/'); if (!slash) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%.*s/fsr-capture/f%03d_android_info.txt", (int)(slash-S.path), S.path, index);
+    FILE* f = fopen(path, "ab"); if (!f) return;
+    va_list args; va_start(args, format); vfprintf(f, format, args); va_end(args);
+    fputc('\n', f); fclose(f);
+}
 
 /* ---- lock held for everything below unless noted ---- */
 
@@ -223,6 +244,8 @@ typedef struct {
     uint32_t session, generation, index; /* the buffer the transaction replaced; index == ~0: none */
     uint64_t frame;
     uint64_t seq; /* the transaction's id (S.txn_seq), compared with S.inflight */
+    int trace_index;
+    uint64_t trace_frame;
     int gates;    /* FIFO without a commit callback: this on_complete ends the outstanding state */
 } DoneCtx;
 
@@ -245,7 +268,12 @@ static void on_complete(void* ctx_, ASurfaceTransactionStats* stats) {
     api.get_controls(stats, &controls, &n);
     if (n > 0) fence = api.prev_release_fence(stats, controls[0]);
     if (controls) api.release_controls(controls);
+    const int64_t latch = ctx->trace_index >= 0 && api.get_latch_time ? api.get_latch_time(stats) : -1;
     pthread_mutex_lock(&S.lock);
+    if (ctx->trace_index >= 0 && ctx->session == S.session)
+        trace_event(ctx->trace_index, "event=complete frame=%llu txn=%llu latch_ns=%lld completed_ns=%lld previous_buffer=%u release_fence=%d",
+                    (unsigned long long)ctx->trace_frame, (unsigned long long)ctx->seq,
+                    (long long)latch, (long long)trace_clock_ns(), ctx->index, fence >= 0);
     if (ctx->index != ~0u && ctx->session == S.session && S.conn_fd >= 0) {
         send_release(ctx->generation, ctx->index, ctx->frame, fence);
     } else if (fence >= 0) {
@@ -284,14 +312,25 @@ static void show_frame(uint32_t generation, uint32_t index, uint64_t frame, uint
     gow3_display_size(w, h, width, height, S.fullscreen, &dw, &dh);
     ARect src = {0, 0, (int32_t)width, (int32_t)height};
     ARect dst = {(w - dw) / 2, (h - dh) / 2, (w - dw) / 2 + dw, (h - dh) / 2 + dh};
+    const int trace_index = S.trace_frames[index] == frame ? S.trace_indices[index] : -1;
     DoneCtx* ctx = malloc(sizeof *ctx);
-    if (!ctx) { send_release(generation, index, frame, acquire_fd); return; }
+    if (!ctx) {
+        if (trace_index >= 0) trace_event(trace_index, "event=drop frame=%llu reason=context_allocation time_ns=%lld",
+            (unsigned long long)frame, (long long)trace_clock_ns());
+        send_release(generation, index, frame, acquire_fd); return;
+    }
     ctx->session = S.session;
     ctx->generation = S.generation;
     ctx->index = S.last_set >= 0 ? (uint32_t)S.last_set : ~0u; /* replaced by this transaction */
     ctx->frame = 0;
     ctx->seq = ++S.txn_seq;
     ctx->gates = 0;
+    ctx->trace_index = trace_index;
+    ctx->trace_frame = frame;
+    if (ctx->trace_index >= 0) trace_event(ctx->trace_index, "event=apply frame=%llu txn=%llu generation=%u buffer=%u applied_ns=%lld source=%d,%d,%d,%d destination=%d,%d,%d,%d window=%d,%d fifo=%d acquire_fence=%d",
+                (unsigned long long)frame, (unsigned long long)ctx->seq, generation, index,
+                (long long)trace_clock_ns(), src.left, src.top, src.right, src.bottom,
+                dst.left, dst.top, dst.right, dst.bottom, w, h, S.fifo, acquire_fd >= 0);
     CommitCtx* commit = NULL;
     if (S.fifo) {
         if (api.set_on_commit && (commit = malloc(sizeof *commit))) {
@@ -377,14 +416,23 @@ static void set_fifo(int fifo) {
 }
 
 static void present_frame(const iss_present_msg* m, int acquire_fd) {
+    const int trace_index = iss_present_trace_index(m);
     if (m->generation != S.generation || m->index >= S.count || !S.bufs[m->index]) {
+        if (trace_index >= 0) trace_event(trace_index, "event=drop frame=%llu reason=invalid_buffer time_ns=%lld",
+                    (unsigned long long)m->frame, (long long)trace_clock_ns());
         if (acquire_fd >= 0) close(acquire_fd);
         return; /* a frame of a set we do not have: nothing to show, nothing to release */
     }
+    S.trace_indices[m->index] = trace_index;
+    S.trace_frames[m->index] = m->frame;
+    if (trace_index >= 0) trace_event(trace_index, "event=receive frame=%llu generation=%u buffer=%u received_ns=%lld",
+                (unsigned long long)m->frame, m->generation, m->index, (long long)trace_clock_ns());
     atomic_fetch_add(&S.frames, 1);
     if (!S.sc || !api.ok) {
         /* No display now (surface lost, app paused): the frame is dropped; its own acquire fence
          * is the release (the game's writes are what the buffer still waits for). */
+        if (trace_index >= 0) trace_event(trace_index, "event=drop frame=%llu reason=no_surface time_ns=%lld",
+                    (unsigned long long)m->frame, (long long)trace_clock_ns());
         send_release(m->generation, m->index, m->frame, acquire_fd);
         return;
     }

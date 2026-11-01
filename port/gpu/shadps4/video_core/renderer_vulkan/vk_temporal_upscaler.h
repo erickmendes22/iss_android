@@ -133,6 +133,10 @@ public:
         vk::Image image;
         vk::Format format;
         u32 width, height;
+#ifdef ISS_ANDROID_BIONIC
+        int capture_index = -1;
+        u64 capture_serial = 0;
+#endif
     };
     bool DisplayOverride(VAddr address, Display& display);
 

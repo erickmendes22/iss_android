@@ -73,6 +73,8 @@
 
 #define ISS_PRESENT_MAGIC 0x52504242u /* "BBPR" */
 #define ISS_PRESENT_VERSION 3u
+/* Optional FRAME diagnostic tag in otherwise unused format/count fields. */
+#define ISS_PRESENT_TRACE_MAGIC 0x54524345u
 #define ISS_PRESENT_MAX_BUFFERS 8u
 
 /* HELLO flags. */
@@ -104,6 +106,11 @@ typedef struct iss_present_msg {
     uint32_t count;      /* buffers in the set (HELLO, RESET) */
     uint64_t frame;      /* frame counter, from 1 */
 } iss_present_msg;
+
+static inline int iss_present_trace_index(const iss_present_msg* msg) {
+    return msg->type == ISS_PRESENT_FRAME && msg->format == ISS_PRESENT_TRACE_MAGIC &&
+           msg->count >= 1 && msg->count <= 120 ? (int)msg->count - 1 : -1;
+}
 
 _Static_assert(sizeof(iss_present_msg) == 40, "iss_present_msg is part of the wire format");
 
