@@ -92,11 +92,19 @@ typedef struct {
     float near_plane, far_plane, vertical_fov, aspect;
     float tangent_horizontal, tangent_vertical;
 } TlgIssCameraSnapshot;
+enum { TLG_ISS_CAMERA_CAPACITY = 16 };
+typedef struct {
+    uint64_t sequence;
+    uint32_t count, reserved;
+    TlgIssCameraSnapshot samples[TLG_ISS_CAMERA_CAPACITY];
+} TlgIssCameraSet;
 /* Called from guest CPU only; does not retain any guest pointer. */
 void tlggpu_iss_camera_publish(const TlgIssCameraSnapshot *sample);
 /* Read at graphics submission, before asynchronous execution. Returns sequence
  * (>0), or 0 if absent. The caller must retain its own value, not guest pointers. */
 uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot *sample);
+/* Bounded, submission-owned camera candidates; the G-buffer chooses its owner. */
+uint64_t tlggpu_iss_camera_read_set(TlgIssCameraSet *samples);
 /* The game opened a file (guest path): feeds the region trace (TLG_REGION_TRACE=1, gpu/shim/tlg_region.h). */
 void tlggpu_note_open(const char *guest_path);
 /* The mouse, gathered by the window thread while the game has it (SDL relative mode: the window

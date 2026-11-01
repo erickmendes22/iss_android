@@ -135,7 +135,7 @@ public:
     /// thread while the draw pipeline is in use (PipelinedTasks), else here after a drain.
     using OrderedTask = void (*)(Rasterizer& rasterizer, const u8* data);
 #ifdef ISS_ANDROID_BIONIC
-    void SetIssSubmissionCamera(const TlgIssCameraSnapshot& sample);
+    void SetIssSubmissionCamera(const TlgIssCameraSet& samples);
 #endif
     /// Returns true when the task was handed to the recording thread (not run yet).
     bool RunInOrder(OrderedTask task, const void* data, u32 size,

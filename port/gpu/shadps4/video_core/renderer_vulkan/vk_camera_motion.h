@@ -71,8 +71,9 @@ public:
     // Called in graphics-stream order, including the optional recording thread.
     // Do not reset a pair already latched for this frame when another command
     // buffer from the same frame arrives.
-    void SetIssSubmissionCamera(const TlgIssCameraSnapshot& sample) noexcept {
-        native_submission_camera = sample;
+    void SetIssSubmissionCameraSet(const TlgIssCameraSet& samples) noexcept {
+        native_submission_candidates = samples;
+        native_require_scene_match = true;
     }
     // Latch the submission's camera and the preceding scene-frame matrix.
     void PrepareIssNativeCamera();
@@ -116,8 +117,9 @@ public:
     // Capture only a handful of distinct source-buffer layouts, once per gameplay session.
     // Never copy from guest pointers: callers supply the CPU-owned constant ring.
     [[nodiscard]] bool NeedGBufferSamples() const noexcept {
-        return for_upscaler && !android_binding_samples_done &&
-               android_binding_sample_count < android_binding_samples.size();
+        return for_upscaler &&
+            ((native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared) ||
+             (!android_binding_samples_done && android_binding_sample_count < android_binding_samples.size()));
     }
     void ObserveGBufferBinding(u64 stage_hash, u32 slot, u32 bytes, const void* ring_copy);
 #endif
@@ -168,6 +170,11 @@ private:
     std::array<float, 16> native_previous_composite{};
     std::array<double, 3> native_previous_origin{};
     TlgIssCameraSnapshot native_submission_camera{};
+    TlgIssCameraSet native_submission_candidates{};
+    bool native_require_scene_match = false;
+    bool native_scene_camera_selected = false;
+    u32 native_scene_matches = 0;
+    u32 native_non_scene_latest = 0;
     std::array<float, 16> native_reprojection{};
     // Game-native projection's subpixel NDC shift (row-vector, row 2).
     // The guest's built-in jitter must not appear as camera-object motion.

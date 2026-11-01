@@ -818,7 +818,7 @@ void ScanDcb(std::span<const u32> dcb, int depth) {
 Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb,
                                            u64 seq
 #ifdef ISS_ANDROID_BIONIC
-                                           , std::optional<TlgIssCameraSnapshot> iss_camera
+                                           , std::optional<TlgIssCameraSet> iss_camera
 #endif
 ) {
     FIBER_ENTER(dcb_task_name);
@@ -1930,9 +1930,10 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 #ifdef ISS_ANDROID_BIONIC
     // Never select the CPU's live camera later, when these commands execute.
-    // Snapshot before preparation workers can delay queueing the submission.
-    TlgIssCameraSnapshot iss_camera{};
-    tlggpu_iss_camera_read(&iss_camera);
+    // Keep every recent camera owner, before preparation workers can delay
+    // queueing. The G-buffer later validates which one generated this scene.
+    TlgIssCameraSet iss_camera{};
+    tlggpu_iss_camera_read_set(&iss_camera);
 #endif
 
     if (EmulatorSettings.IsCopyGpuBuffers()) {

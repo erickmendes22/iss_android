@@ -9,6 +9,7 @@
 #include "tlg_toggles.h"
 #ifdef ISS_ANDROID_BIONIC
 #include "../../../tlggpu.h"
+#include "iss_scene_camera.h"
 #endif
 
 #include "video_core/host_shaders/camera_motion_comp.h"
@@ -198,7 +199,9 @@ void CameraMotion::PrepareIssNativeCamera() {
     // between those calls must not replace the camera pair within one GPU frame.
     if (!for_upscaler || !depth_id || native_frame_prepared) return;
     native_frame_prepared = true;
-    const TlgIssCameraSnapshot sample = native_submission_camera;
+    const TlgIssCameraSnapshot sample =
+        native_require_scene_match && !native_scene_camera_selected
+            ? TlgIssCameraSnapshot{} : native_submission_camera;
     const u64 sequence = sample.sequence;
     if (!sequence) {
         native_previous_valid = native_motion_valid = false;
@@ -467,6 +470,17 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
 #ifdef ISS_ANDROID_BIONIC
 void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const void* bytes) {
     if (!NeedGBufferSamples() || !bytes || size < 24 || size > 65536) return;
+    if (native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared) {
+        TlgIssCameraSnapshot matched{};
+        if (IssSceneCamera::Select(native_submission_candidates, native_previous_object,
+                                   hash, slot, size, bytes, matched)) {
+            native_submission_camera = matched;
+            native_scene_camera_selected = true;
+            ++native_scene_matches;
+            if (matched.sequence != native_submission_candidates.sequence) ++native_non_scene_latest;
+        }
+    }
+    if (android_binding_samples_done || android_binding_sample_count >= android_binding_samples.size()) return;
     for (u32 i = 0; i < android_binding_sample_count; ++i) {
         const auto& item = android_binding_samples[i];
         if (item.shader_hash == hash && item.size == size) return;
@@ -512,6 +526,7 @@ void CameraMotion::OnConstants(const float* data) {
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 #ifdef ISS_ANDROID_BIONIC
     ++android_probe_gbuffer;
+    if (depth != depth_id && !native_frame_prepared) native_scene_camera_selected = false;
 #endif
     depth_id = depth;
 }
@@ -568,16 +583,18 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         android_camera_log_count);
             std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
                         "current_native=%u repeated=%u missing=%u matrix=%u jitter=%u "
-                        "seed=%u camera_switch=%u sequence_gap=%u transform=%u\n",
+                        "seed=%u camera_switch=%u sequence_gap=%u transform=%u "
+                        "scene_matches=%u non_scene_latest=%u\n",
                         native_frames_valid, native_frames_rejected,
                         unsigned(native_motion_valid), native_frames_repeated,
                         native_reject_missing, native_reject_matrix, native_reject_jitter,
                         native_reject_seed, native_reject_switch, native_reject_gap,
-                        native_reject_transform);
+                        native_reject_transform, native_scene_matches, native_non_scene_latest);
             native_frames_valid = native_frames_rejected = 0;
             native_frames_repeated = native_reject_missing = native_reject_matrix = 0;
             native_reject_jitter = native_reject_seed = native_reject_switch = 0;
             native_reject_gap = native_reject_transform = 0;
+            native_scene_matches = native_non_scene_latest = 0;
             android_camera_frame_updates = 0;
         }
 
@@ -633,6 +650,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     depth_id = {};
 #ifdef ISS_ANDROID_BIONIC
     native_frame_prepared = false;
+    native_scene_camera_selected = false;
 #endif
 }
 

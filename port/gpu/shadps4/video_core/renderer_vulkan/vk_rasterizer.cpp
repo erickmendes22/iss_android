@@ -840,14 +840,14 @@ bool Rasterizer::RunInOrder(OrderedTask task, const void* data, u32 size, u64 to
 }
 
 #ifdef ISS_ANDROID_BIONIC
-void Rasterizer::SetIssSubmissionCamera(const TlgIssCameraSnapshot& sample) {
+void Rasterizer::SetIssSubmissionCamera(const TlgIssCameraSet& samples) {
     // RunInOrder already copies task bytes into the recording queue. Reuse it
     // rather than publishing a mutable shared camera across stage A/stage B.
     RunInOrder([](Rasterizer& self, const u8* data) {
-        TlgIssCameraSnapshot snapshot{};
+        TlgIssCameraSet snapshot{};
         std::memcpy(&snapshot, data, sizeof(snapshot));
-        self.camera_motion->SetIssSubmissionCamera(snapshot);
-    }, &sample, sizeof(sample));
+        self.camera_motion->SetIssSubmissionCameraSet(snapshot);
+    }, &samples, sizeof(samples));
 }
 #endif
 

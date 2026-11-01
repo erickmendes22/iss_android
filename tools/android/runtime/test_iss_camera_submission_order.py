@@ -31,7 +31,7 @@ bool Disabled(u64){return disabled;}
 }
 struct Camera {
  TlgIssCameraSnapshot selected{};
- void SetIssSubmissionCamera(const TlgIssCameraSnapshot& s){selected=s;}
+ void SetIssSubmissionCameraSet(const TlgIssCameraSet& s){selected=s.count?s.samples[0]:TlgIssCameraSnapshot{};}
 };
 struct DrawPipe {
  static constexpr u32 ReasonRasterizer=1;
@@ -50,7 +50,7 @@ public:
  bool UseDrawPipe()const{return enabled;}
  void DrainDrawPipe(u32);
  bool RunInOrder(OrderedTask,const void*,u32,u64=TlgToggle::PipelinedTasks);
- void SetIssSubmissionCamera(const TlgIssCameraSnapshot&);
+ void SetIssSubmissionCamera(const TlgIssCameraSet&);
 };
 enum class PacketKind:u32{Task};
 struct TaskPacket{PacketKind kind;u32 size;Rasterizer::OrderedTask task;};
@@ -66,22 +66,23 @@ void Rasterizer::DrainDrawPipe(u32){
 ORDERED
 SETTER
 static void draw(Rasterizer& r,const u8*){r.observed.push_back(r.camera.selected.sequence);}
+static TlgIssCameraSet pack(const TlgIssCameraSnapshot& c){TlgIssCameraSet s{};s.sequence=c.sequence;s.count=1;s.samples[0]=c;return s;}
 int main(){
  Rasterizer r;
  const u8 payload=0;
  TlgIssCameraSnapshot a{};a.sequence=100;a.guest_object=0x100;a.composite[12]=3;
- r.SetIssSubmissionCamera(a);r.RunInOrder(draw,&payload,sizeof(payload));
+ r.SetIssSubmissionCamera(pack(a));r.RunInOrder(draw,&payload,sizeof(payload));
  a.sequence=999;a.composite[12]=999;
  TlgIssCameraSnapshot b{};b.sequence=101;b.guest_object=0x100;b.composite[12]=5;
- r.SetIssSubmissionCamera(b);r.RunInOrder(draw,&payload,sizeof(payload));
+ r.SetIssSubmissionCamera(pack(b));r.RunInOrder(draw,&payload,sizeof(payload));
  // Nested IB draws do not select the CPU publisher again.
  r.RunInOrder(draw,&payload,sizeof(payload));b.sequence=1000;
  assert(r.observed.empty());r.DrainDrawPipe(1);
  assert((r.observed==std::vector<u64>{100,101,101}));
  assert(r.camera.selected.sequence==101&&r.camera.selected.composite[12]==5);
  // Switching to direct recording drains earlier work before the new camera.
- b.sequence=102;r.SetIssSubmissionCamera(b);r.RunInOrder(draw,&payload,sizeof(payload));
- r.enabled=false;a.sequence=200;r.SetIssSubmissionCamera(a);
+ b.sequence=102;r.SetIssSubmissionCamera(pack(b));r.RunInOrder(draw,&payload,sizeof(payload));
+ r.enabled=false;a.sequence=200;r.SetIssSubmissionCamera(pack(a));
  assert(r.observed.back()==102&&r.camera.selected.sequence==200);
  r.RunInOrder(draw,&payload,sizeof(payload));assert(r.observed.back()==200);
  // Missing cameras stay missing; disabling queued tasks uses the same fallback.
@@ -102,20 +103,20 @@ int main(){
         source = (GPU / 'amdgpu/liverpool.cpp').read_text()
         submit = source[source.index('void Liverpool::SubmitGfx('):
                         source.index('void Liverpool::SubmitAsc(')]
-        self.assertLess(submit.index('tlggpu_iss_camera_read(&iss_camera)'),
+        self.assertLess(submit.index('tlggpu_iss_camera_read_set(&iss_camera)'),
                         submit.index('draw_prep->Build(dcb)'))
         self.assertIn(', iss_camera', submit)
         process = source[source.index('Liverpool::Task Liverpool::ProcessGraphics('):]
-        self.assertIn('std::optional<TlgIssCameraSnapshot> iss_camera', process)
+        self.assertIn('std::optional<TlgIssCameraSet> iss_camera', process)
         self.assertLess(process.index('rasterizer->SetIssSubmissionCamera(*iss_camera)'),
                         process.index('draw_prep->BeginSubmission'))
         # The default optional is empty for nested IBs. Never use a coroutine
         # reference to SubmitGfx's stack-local snapshot or re-read on resume.
         header = (GPU / 'amdgpu/liverpool.h').read_text()
-        self.assertIn('std::optional<TlgIssCameraSnapshot> iss_camera = std::nullopt', header)
+        self.assertIn('std::optional<TlgIssCameraSet> iss_camera = std::nullopt', header)
         camera = (GPU / 'renderer_vulkan/vk_camera_motion.cpp').read_text()
         self.assertNotIn('tlggpu_iss_camera_read(', camera)
-        self.assertIn('const TlgIssCameraSnapshot sample = native_submission_camera;', camera)
+        self.assertIn('native_require_scene_match && !native_scene_camera_selected', camera)
 
 
 if __name__ == '__main__':
