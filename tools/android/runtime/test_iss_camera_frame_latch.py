@@ -1,5 +1,6 @@
 """Execute production camera preparation and frame cleanup without a GPU."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ class CameraFrameLatch(unittest.TestCase):
         setter=header[header.index('    void SetIssSubmissionCameraSet('):
                       header.index('    // Latch the submission')]
         observe=source[source.index('void CameraMotion::ObserveGBufferBinding('):source.index('\n#endif\n\nvoid CameraMotion::OnConstants')]
-        need=header[header.index('    [[nodiscard]] bool NeedGBufferSamples()'):header.index('    void ObserveGBufferBinding(')]
+        need=header[header.index('    [[nodiscard]] bool NeedGBufferSamples('):header.index('    void ObserveGBufferBinding(')]
         harness=r'''
 #include <array>
 #include <cassert>
@@ -30,6 +31,7 @@ class CameraFrameLatch(unittest.TestCase):
 #include <cstring>
 #include "gpu/tlggpu.h"
 #include "gpu/shim/iss_scene_camera.h"
+#include "gpu/shim/iss_fsr_diagnostics.h"
 using u32=uint32_t;using u64=uint64_t;
 static TlgIssCameraSnapshot latest{};
 extern "C" uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot* out){*out=latest;return out->sequence;}
@@ -201,6 +203,14 @@ int main(int argc,char**argv){
    assert(ready(c)==bool(i));c.EndFrame();c.BeginFrame();
   }
   assert(c.native_reject_switch==1);
+  // Reject unrelated bindings before mapping/copying their source memory.
+  c.SetIssSubmissionCameraSet(bank.Read());
+  assert(c.NeedGBufferSamples(0x40b18d54,0,212));
+  if(!IssFsrDiagnostics::Enabled()){
+   assert(!c.NeedGBufferSamples(0x123,0,212));
+   assert(!c.NeedGBufferSamples(0x40b18d54,1,212));
+   assert(!c.NeedGBufferSamples(0x40b18d54,0,864));
+  }
   // An unmatched frame must never fall back to the latest CPU camera.
   c.SetIssSubmissionCameraSet(bank.Read());c.PrepareSubmitted();
   assert(!ready(c)&&c.native_reject_missing==1);
@@ -217,6 +227,8 @@ int main(int argc,char**argv){
             subprocess.run(['c++','-std=c++20','-DISS_ANDROID_BIONIC','-Wall','-Wextra','-Werror','-I'+str(ROOT/'port'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
             for case in ('repeat','double','validation','pause','gates','queued','world_translation','scene_owner'):
                 with self.subTest(case=case):
-                    subprocess.run([str(p/'test'),case],check=True)
+                    for diagnostics in ('0','1'):
+                        subprocess.run([str(p/'test'),case],check=True,
+                            env=dict(os.environ,ISS_FSR3_DIAGNOSTICS=diagnostics))
 
 if __name__=='__main__':unittest.main()

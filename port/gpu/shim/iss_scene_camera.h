@@ -100,11 +100,15 @@ inline bool Valid(const TlgIssCameraSnapshot& camera) {
     return true;
 }
 
+inline bool IsInstanceBinding(std::uint64_t shader, unsigned slot, unsigned bytes) {
+    return slot == 0 && bytes >= 212 && bytes % 212 == 0 &&
+        (shader == 0x40b18d54 || shader == 0x6042bbde || shader == 0x56673dd1);
+}
+
 inline bool Select(const TlgIssCameraSet& set, std::uint64_t preferred_object,
                    std::uint64_t shader, unsigned slot, unsigned bytes, const void* data,
                    TlgIssCameraSnapshot& selected) {
-    if (!data || slot != 0 || bytes < 212 || bytes % 212 ||
-        (shader != 0x40b18d54 && shader != 0x6042bbde && shader != 0x56673dd1)) return false;
+    if (!data || !IsInstanceBinding(shader, slot, bytes)) return false;
     std::array<float, 21> instance{};
     std::memcpy(instance.data(), data, sizeof(instance));
     bool found = false;

@@ -469,7 +469,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
 
 #ifdef ISS_ANDROID_BIONIC
 void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const void* bytes) {
-    if (!NeedGBufferSamples() || !bytes || size < 24 || size > 65536) return;
+    if (!NeedGBufferSamples(hash, slot, size) || !bytes || size < 24 || size > 65536) return;
     if (native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared) {
         TlgIssCameraSnapshot matched{};
         if (IssSceneCamera::Select(native_submission_candidates, native_previous_object,
@@ -480,7 +480,8 @@ void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const voi
             if (matched.sequence != native_submission_candidates.sequence) ++native_non_scene_latest;
         }
     }
-    if (android_binding_samples_done || android_binding_sample_count >= android_binding_samples.size()) return;
+    if (!IssFsrDiagnostics::Enabled() || android_binding_samples_done ||
+        android_binding_sample_count >= android_binding_samples.size()) return;
     for (u32 i = 0; i < android_binding_sample_count; ++i) {
         const auto& item = android_binding_samples[i];
         if (item.shader_hash == hash && item.size == size) return;
@@ -497,7 +498,7 @@ void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const voi
 
 void CameraMotion::OnConstants(const float* data) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_constants;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_constants;
 #endif
     // Scene constants: far plane 3000, 1/far, and the render size.
     if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
@@ -505,7 +506,7 @@ void CameraMotion::OnConstants(const float* data) {
         return;
     }
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_signature;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_signature;
 #endif
     if (frame_has_camera) {
         return; // the first one of a frame is the main camera
@@ -525,7 +526,7 @@ void CameraMotion::OnConstants(const float* data) {
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_gbuffer;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_gbuffer;
     if (depth != depth_id && !native_frame_prepared) native_scene_camera_selected = false;
 #endif
     depth_id = depth;
@@ -533,7 +534,7 @@ void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
 #ifdef ISS_ANDROID_BIONIC
-    if (for_upscaler) {
+    if (IssFsrDiagnostics::Enabled() && for_upscaler) {
         // Report the ordered submission snapshot, not a newer CPU publication.
         const TlgIssCameraSnapshot sample = native_submission_camera;
         const u64 sequence = sample.sequence;

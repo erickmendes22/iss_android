@@ -60,6 +60,9 @@ FfxVkPortableImage Describe(vk::Image image, vk::Format format, u32 width, u32 h
 /// <dir>/fNNN_<name>_<w>x<h>_<format>.raw, for checking temporal stability offline.
 /// Returns the frame number to dump, or -1.
 int DumpFrame() {
+#ifdef ISS_ANDROID_BIONIC
+    if (!IssFsrDiagnostics::CaptureEnabled()) return -1;
+#endif
     static const char* trigger = std::getenv("TLG_DUMP_TRIGGER");
     static int remaining = 0, index = 0, polls = 0;
     if (!trigger) {
@@ -376,7 +379,7 @@ std::array<float, 2> TemporalUpscaler::IssGeometryJitter(VideoCore::ImageId dept
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.scene_colors;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.scene_colors;
     // At the first HDR lighting pass the geometry depth is still valid.
     // Subsequent passes reuse that same guest D32S8 image for HUD primitives,
     // destroying the per-pixel scene depth before RunScaled() normally reads it.
@@ -477,7 +480,7 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     const auto& settings = TlgSettings::Get();
 #ifdef ISS_ANDROID_BIONIC
-    if (Active() && ++android_fsr_probe.frames >= 180) {
+    if (IssFsrDiagnostics::Enabled() && Active() && ++android_fsr_probe.frames >= 180) {
         const auto& d = android_fsr_probe;
         std::printf("FSR3 probe: frames=%u scene_color=%u ldr_target=%u draws=%u "
                     "native_viewport=%u ui_candidates=%u camera_ready=%u ldr_match=%u "
@@ -508,7 +511,7 @@ bool TemporalUpscaler::OnFrameStart() {
                     d.native_camera_dispatches, d.fallback_motion_dispatches);
         android_fsr_probe = {};
     }
-    if (!android_ui_samples_printed && android_ui_sample_count &&
+    if (IssFsrDiagnostics::Enabled() && !android_ui_samples_printed && android_ui_sample_count &&
         android_fsr_probe.frames == 0) {
         std::printf("FSR3 ISS fullscreen passes: %u distinct candidates\n",
                     android_ui_sample_count);
@@ -1274,7 +1277,7 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
                          sizeof(extra), &extra);
     cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.extra_sharpen_dispatches;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.extra_sharpen_dispatches;
 #endif
     image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                   vk::AccessFlagBits2::eShaderStorageWrite, all, rw);
@@ -1775,7 +1778,7 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.ldr_targets;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ldr_targets;
 #endif
         ldr_target = color;
     }
@@ -1784,10 +1787,12 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.ui_draws;
-    if (native_viewport) ++android_fsr_probe.native_viewport_draws;
-    if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
-    if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+    if (IssFsrDiagnostics::Enabled()) {
+        ++android_fsr_probe.ui_draws;
+        if (native_viewport) ++android_fsr_probe.native_viewport_draws;
+        if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
+        if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+    }
 #endif
     if (!Scaled() && vs_hash == ui_trigger_vs) done_this_frame = true;
     if (!Scaled() || !color) {
@@ -1795,7 +1800,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     }
     if (ui_phase) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.ui_draws_after_fsr;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ui_draws_after_fsr;
 #endif
         // A UI movie can start without stencil and enable it for later text/masks.
         if (color == ui_color && depth && depth != ui_depth) {
@@ -1811,7 +1816,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     // The original Bloodborne probe required a known LDR target here.
     // ISS draws its fullscreen passes before that target is identified,
     // so sample the actual vertex hashes irrespective of LDR availability.
-    if (android_fsr_probe.scene_colors > 0 &&
+    if (IssFsrDiagnostics::Enabled() && android_fsr_probe.scene_colors > 0 &&
         (native_viewport || (ldr_target && ldr_target == color)) &&
         !android_ui_samples_printed &&
         android_ui_sample_count < android_ui_samples.size()) {
@@ -1842,7 +1847,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         RenderTarget(image.info.size.width, image.info.size.height) &&
         !FrameCapture::IsDisplayBuffer(image.info.guest_address);
 #ifdef ISS_ANDROID_BIONIC
-    if (ui_draw) ++android_fsr_probe.rgba_ui_candidates;
+    if (IssFsrDiagnostics::Enabled() && ui_draw) ++android_fsr_probe.rgba_ui_candidates;
 #endif
     switch (UiComposition::Choose(Scaled(), ui_draw,
                                   camera_motion.Ready() && ldr_target == color,
@@ -2071,7 +2076,7 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
 
 void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId depth_id) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.ui_only_copies;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ui_only_copies;
 #endif
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->Mark(0xF5A1'0000ull, [] { return std::string{"upscaler RunUiOnly"}; });
@@ -2244,12 +2249,14 @@ void TemporalUpscaler::RunScaled() {
         return;
     }
 #ifdef ISS_ANDROID_BIONIC
-    android_fsr_probe.source_width = iw;
-    android_fsr_probe.source_height = ih;
-    android_fsr_probe.depth_width = depth.info.size.width;
-    android_fsr_probe.depth_height = depth.info.size.height;
-    android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
-    android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+    if (IssFsrDiagnostics::Enabled()) {
+        android_fsr_probe.source_width = iw;
+        android_fsr_probe.source_height = ih;
+        android_fsr_probe.depth_width = depth.info.size.width;
+        android_fsr_probe.depth_height = depth.info.size.height;
+        android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
+        android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+    }
 #endif
 #ifdef ISS_ANDROID_BIONIC
     // Some scenes complete from UiComposition::Background::Temporal rather
@@ -2639,9 +2646,9 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.dispatched;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.dispatched;
         static bool native_jitter_reported = false;
-        if (!native_jitter_reported && camera_motion.IssNativeCameraReady()) {
+        if (IssFsrDiagnostics::Enabled() && !native_jitter_reported && camera_motion.IssNativeCameraReady()) {
             native_jitter_reported = true;
             std::printf("FSR3 ISS jitter aligned: native=%.3f,%.3f viewport=%.3f,%.3f "
                         "sdk=%.3f,%.3f (render pixels)\n",
@@ -2653,12 +2660,12 @@ void TemporalUpscaler::RunScaled() {
         // not OnFrameStart, where the previous frame's camera is invalidated.
         // This is a per-scene result and makes the 180-frame summary truthful.
         if (camera_motion.IssNativeCameraReady()) {
-            ++android_fsr_probe.native_camera_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.native_camera_dispatches;
         } else {
-            ++android_fsr_probe.fallback_motion_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.fallback_motion_dispatches;
         }
         if (settings.sharpen.load() && settings.sharpness.load() > 0.0f)
-            ++android_fsr_probe.rcas_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.rcas_dispatches;
 #endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
 #ifdef ISS_ANDROID_BIONIC
@@ -2776,7 +2783,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                                      const VideoCore::ImageViewInfo& view_info, Target& target) {
     if (ui_phase && color == ui_color) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.redirected_color;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.redirected_color;
 #endif
         target = {Mirror(vk::Image(ui_image), ui_views, view_info.format, {}),
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
@@ -2874,7 +2881,7 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
         });
     }
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.redirected_samples;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.redirected_samples;
 #endif
     view = Mirror(vk::Image(ui_image), ui_views, info.format, info.mapping);
     layout = vk::ImageLayout::eGeneral;
@@ -2908,7 +2915,12 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
 #endif
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // TLG_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
-    static const char* dump = std::getenv("TLG_PRESENT_DUMP_TRIGGER");
+    static const char* dump = []() -> const char* {
+#ifdef ISS_ANDROID_BIONIC
+        if (!IssFsrDiagnostics::CaptureEnabled()) return nullptr;
+#endif
+        return std::getenv("TLG_PRESENT_DUMP_TRIGGER");
+    }();
     static const int dump_count = [] {
         const char* env = std::getenv("TLG_PRESENT_DUMP_COUNT");
         return env ? std::max(1, std::atoi(env)) : 1;

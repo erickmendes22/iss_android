@@ -15,6 +15,9 @@
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "tlg_toggles.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "../../../shim/iss_fsr_diagnostics.h"
+#endif
 #include "tlg_settings.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_lighting_test.h"
@@ -326,41 +329,43 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         camera_motion->OnGBufferPass(db_desc.first);
 #ifdef ISS_ANDROID_BIONIC
         upscaler->ObserveIssSceneDepth(db_desc.first);
-        // Discover whether ISS exports native motion vectors in its MRTs.
-        // A camera inferred from one object's transform would corrupt temporal history.
-        // Read attachment descriptors only (no image download or GPU wait).
-        static std::array<u64, 12> inspected_layouts{};
-        static u32 inspected_count = 0;
-        const u64 ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
-        const auto& d = texture_cache.GetImage(db_desc.first);
-        // Distinct render-target layouts, not 12 shaders sharing the same G-buffer.
-        // Otherwise the first few material permutations would exhaust the census.
-        u64 layout = (u64(key.mrt_mask) << 32) ^ u64(d.info.pixel_format);
-        for (u32 slot = 0; slot < cb_descs.size(); ++slot) {
-            if (!(key.mrt_mask & (1u << slot)) || !cb_descs[slot].first) continue;
-            const auto& target = texture_cache.GetImage(cb_descs[slot].first);
-            layout = (layout * 1099511628211ull) ^ u64(target.info.pixel_format);
-            layout = (layout * 1099511628211ull) ^ u64(target.info.size.width);
-            layout = (layout * 1099511628211ull) ^ u64(target.info.size.height);
-        }
-        bool seen = false;
-        for (u32 n = 0; n < inspected_count; ++n) {
-            if (inspected_layouts[n] == layout) { seen = true; break; }
-        }
-        if (!seen && inspected_count < inspected_layouts.size()) {
-            inspected_layouts[inspected_count++] = layout;
-            std::printf("FSR3 ISS MRT: ps=%016llx mask=%02x depth=%s %ux%u",
-                        static_cast<unsigned long long>(ps_hash), key.mrt_mask,
-                        vk::to_string(d.info.pixel_format).c_str(), d.info.size.width,
-                        d.info.size.height);
+        if (IssFsrDiagnostics::Enabled()) {
+            // Discover whether ISS exports native motion vectors in its MRTs.
+            // A camera inferred from one object's transform would corrupt temporal history.
+            // Read attachment descriptors only (no image download or GPU wait).
+            static std::array<u64, 12> inspected_layouts{};
+            static u32 inspected_count = 0;
+            const u64 ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
+            const auto& d = texture_cache.GetImage(db_desc.first);
+            // Distinct render-target layouts, not 12 shaders sharing the same G-buffer.
+            // Otherwise the first few material permutations would exhaust the census.
+            u64 layout = (u64(key.mrt_mask) << 32) ^ u64(d.info.pixel_format);
             for (u32 slot = 0; slot < cb_descs.size(); ++slot) {
                 if (!(key.mrt_mask & (1u << slot)) || !cb_descs[slot].first) continue;
                 const auto& target = texture_cache.GetImage(cb_descs[slot].first);
-                std::printf(" cb%u=%s:%ux%u", slot,
-                            vk::to_string(target.info.pixel_format).c_str(),
-                            target.info.size.width, target.info.size.height);
+                layout = (layout * 1099511628211ull) ^ u64(target.info.pixel_format);
+                layout = (layout * 1099511628211ull) ^ u64(target.info.size.width);
+                layout = (layout * 1099511628211ull) ^ u64(target.info.size.height);
             }
-            std::printf("\n");
+            bool seen = false;
+            for (u32 n = 0; n < inspected_count; ++n) {
+                if (inspected_layouts[n] == layout) { seen = true; break; }
+            }
+            if (!seen && inspected_count < inspected_layouts.size()) {
+                inspected_layouts[inspected_count++] = layout;
+                std::printf("FSR3 ISS MRT: ps=%016llx mask=%02x depth=%s %ux%u",
+                            static_cast<unsigned long long>(ps_hash), key.mrt_mask,
+                            vk::to_string(d.info.pixel_format).c_str(), d.info.size.width,
+                            d.info.size.height);
+                for (u32 slot = 0; slot < cb_descs.size(); ++slot) {
+                    if (!(key.mrt_mask & (1u << slot)) || !cb_descs[slot].first) continue;
+                    const auto& target = texture_cache.GetImage(cb_descs[slot].first);
+                    std::printf(" cb%u=%s:%ux%u", slot,
+                                vk::to_string(target.info.pixel_format).c_str(),
+                                target.info.size.width, target.info.size.height);
+                }
+                std::printf("\n");
+            }
         }
 #endif
     }
@@ -2817,7 +2822,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
             }
             if (!desc.IsSpecial()) {
 #ifdef ISS_ANDROID_BIONIC
-                if (gbuffer_draw && camera_motion->NeedGBufferSamples()) {
+                if (gbuffer_draw && camera_motion->NeedGBufferSamples(stage.pgm_hash, buffer_index, ring->size)) {
                     camera_motion->ObserveGBufferBinding(stage.pgm_hash, buffer_index,
                                                           ring->size,
                                                           constant_ring->Data(ring->offset));
@@ -2887,7 +2892,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
 #ifdef ISS_ANDROID_BIONIC
             // Direct Bionic draw path has no RingBinding. Sample the actual
             // non-ring constant source too; only when its full range is mapped.
-            if (gbuffer_draw && camera_motion->NeedGBufferSamples() &&
+            if (gbuffer_draw && camera_motion->NeedGBufferSamples(stage.pgm_hash, buffer_index, vsharp.GetSize()) &&
                 vsharp.base_address != 0 && vsharp.GetSize() >= 24 &&
                 vsharp.GetSize() <= 65536 &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0) &&

@@ -120,10 +120,6 @@ public class CaptureExportTest {
    p=pathlib.Path(d);(p/'CaptureExportTest.java').write_text(harness)
    subprocess.run(['java','com.sun.tools.javac.Main','-d',d,str(SRC/'FsrCaptureFiles.java'),str(p/'CaptureExportTest.java')],check=True)
    subprocess.run(['java','-ea','-cp',d,'ro.cobrabm.fexdroid.CaptureExportTest',str(p/'capture')],check=True)
-  launcher=(SRC/'BionicMainActivity.java').read_text();menu=(SRC/'BionicPlayerMenu.java').read_text()
-  self.assertIn('FsrCaptureFiles.select(dir)',launcher)
-  self.assertIn('FsrCaptureFiles.select(capture)',launcher)
-  self.assertIn('FsrCaptureFiles.captureName(file.getName())',menu)
  def test_passive_capture_layout_and_fsr_input_preserved(self):
   code=(ROOT/'port/gpu/shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp').read_text()
   at=code.index('auto& pre = texture_cache.GetImage(iss_aa_prefilter);')

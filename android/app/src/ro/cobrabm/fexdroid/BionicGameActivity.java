@@ -127,14 +127,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    e.put("TLG_REACTIVE","0");
    e.put("TLG_JITTER","1");
    e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
-   // Raw input/depth/motion and output capture is armed from the in-game menu.
-   // Capture is off by default, capped to two frames, and stored privately.
-   File captureDir=new File(base,"fsr-capture");
-   if(captureDir.isDirectory()||captureDir.mkdirs()){
-    e.put("TLG_DUMP_TRIGGER",new File(base,"fsr-capture.trigger").getAbsolutePath());
-    e.put("TLG_DUMP_DIR",captureDir.getAbsolutePath());
-    e.put("TLG_DUMP_FRAMES","2");
-   }
+
   }
   String resolution=BionicVideoSettings.effectiveResolutionPatch(prefs);
   String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);

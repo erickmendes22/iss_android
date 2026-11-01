@@ -9,6 +9,8 @@
 #include <vector>
 #ifdef ISS_ANDROID_BIONIC
 #include "../../../tlggpu.h"
+#include "../../../shim/iss_fsr_diagnostics.h"
+#include "../../../shim/iss_scene_camera.h"
 #endif
 
 #include "common/types.h"
@@ -116,10 +118,12 @@ public:
 #ifdef ISS_ANDROID_BIONIC
     // Capture only a handful of distinct source-buffer layouts, once per gameplay session.
     // Never copy from guest pointers: callers supply the CPU-owned constant ring.
-    [[nodiscard]] bool NeedGBufferSamples() const noexcept {
+    [[nodiscard]] bool NeedGBufferSamples(u64 hash, u32 slot, u32 size) const noexcept {
         return for_upscaler &&
-            ((native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared) ||
-             (!android_binding_samples_done && android_binding_sample_count < android_binding_samples.size()));
+            ((native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared &&
+              IssSceneCamera::IsInstanceBinding(hash, slot, size)) ||
+             (IssFsrDiagnostics::Enabled() && !android_binding_samples_done &&
+              android_binding_sample_count < android_binding_samples.size()));
     }
     void ObserveGBufferBinding(u64 stage_hash, u32 slot, u32 bytes, const void* ring_copy);
 #endif
