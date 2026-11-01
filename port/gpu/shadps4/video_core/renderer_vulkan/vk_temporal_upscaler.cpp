@@ -347,6 +347,29 @@ bool TemporalUpscaler::ReactiveOn() const {
            TlgSettings::Get().upscaler != TlgSettings::UpscalerTaa;
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void TemporalUpscaler::ObserveIssSceneDepth(VideoCore::ImageId depth) {
+    if (!depth || !scaled_session || !Active() ||
+        TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3) return;
+    const auto& info = texture_cache.GetImage(depth).info;
+    if (RenderTarget(info.size.width, info.size.height)) {
+        iss_scene_jitter.Observe({info.guest_address, info.size.width,
+                                 info.size.height, u64(info.pixel_format)});
+    }
+}
+
+std::array<float, 2> TemporalUpscaler::IssGeometryJitter(VideoCore::ImageId depth) const {
+    if (!depth || !Active()) return {};
+    if (!scaled_session || TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3) {
+        return depth == camera_motion.Depth() ? Jitter() : std::array<float, 2>{};
+    }
+    const auto& info = texture_cache.GetImage(depth).info;
+    return iss_scene_jitter.Applies({info.guest_address, info.size.width,
+                                    info.size.height, u64(info.pixel_format)})
+               ? Jitter() : std::array<float, 2>{};
+}
+#endif
+
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
 #ifdef ISS_ANDROID_BIONIC
     ++android_fsr_probe.scene_colors;
@@ -565,6 +588,7 @@ bool TemporalUpscaler::OnFrameStart() {
     done_this_frame = false;
 #ifdef ISS_ANDROID_BIONIC
     iss_scene_depth_snapshot_valid = false;
+    iss_scene_jitter.BeginFrame(changed || !active);
 #endif
     ldr_target = {};
 #ifdef ISS_ANDROID_BIONIC
@@ -2193,6 +2217,12 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
 }
 
 void TemporalUpscaler::RunScaled() {
+#ifdef ISS_ANDROID_BIONIC
+    // Report what was actually rasterized, including the zero-jitter discovery
+    // frame. Never tell FSR to undo a Halton shift absent from its input.
+    const auto jitter = IssGeometryJitter(camera_motion.Depth());
+    camera_motion.SetEffectiveJitter(jitter);
+#endif
     if (auto* profiler = GpuProfiler::Get()) {
         const char* label = TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa
             ? "upscaler RunScaled (TAA)" : "upscaler RunScaled (FSR)";

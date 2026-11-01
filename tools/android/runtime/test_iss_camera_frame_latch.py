@@ -50,10 +50,26 @@ static void publish(u64 seq,float x,u64 object=0x100){
  latest={};latest.sequence=seq;latest.guest_object=object;
  for(int i:{0,5,10,15})latest.composite[i]=latest.inverse[i]=latest.projection[i]=1;
  latest.composite[12]=x;latest.inverse[12]=-x;
+ std::memcpy(latest.view_transform,latest.composite,sizeof(latest.composite));
  latest.near_plane=10;latest.far_plane=10000000;
  latest.vertical_fov=1;latest.aspect=16.f/9;
 }
 static bool ready(const CameraMotion& c){return c.native_motion_valid&&c.current.valid&&c.previous.valid;}
+static void publish_world(u64 seq,float camera_x){
+ publish(seq,0);
+ latest.projection[0]=latest.composite[0]=1.02964926f;
+ latest.projection[5]=latest.composite[5]=1.83048773f;
+ latest.projection[10]=latest.composite[10]=-1.00000102e-6f;
+ latest.projection[11]=latest.composite[11]=1.f;
+ latest.projection[14]=latest.composite[14]=10.0000095f;
+ latest.projection[15]=latest.composite[15]=0.f;
+ std::memset(latest.inverse,0,sizeof(latest.inverse));
+ latest.inverse[0]=1.f/latest.composite[0];latest.inverse[5]=1.f/latest.composite[5];
+ latest.inverse[11]=1.f/latest.composite[14];latest.inverse[14]=1.f;
+ latest.inverse[15]=-latest.composite[10]/latest.composite[14];
+ std::memcpy(latest.view_transform,latest.composite,sizeof(latest.composite));
+ for(int j=0;j<4;++j)latest.view_transform[12+j]-=camera_x*latest.composite[j];
+}
 int main(int argc,char**argv){
  assert(argc==2);
  if(!std::strcmp(argv[1],"repeat")){
@@ -126,6 +142,22 @@ int main(int argc,char**argv){
   c.BeginFrame();c.PrepareIssNativeCamera();assert(!ready(c));
   c.EndFrame();c.BeginFrame();publish(3,0);c.PrepareIssNativeCamera();assert(!ready(c));
   c.EndFrame();c.BeginFrame();publish(4,0);c.PrepareIssNativeCamera();assert(ready(c));
+ }else if(!std::strcmp(argv[1],"world_translation")){
+  CameraMotion c;publish_world(100,0);c.PrepareIssNativeCamera();c.EndFrame();
+  c.BeginFrame();publish_world(101,3);c.PrepareIssNativeCamera();assert(ready(c));
+  const double x=-3.0*latest.projection[0]/1000.0;
+  const double depth=latest.projection[10]+latest.projection[14]/1000.0;
+  const std::array<double,4> clip{x,0,depth,1};
+  std::array<double,4> previous_clip{};
+  for(int r=0;r<4;++r)for(int k=0;k<4;++k)
+   previous_clip[r]+=c.native_reprojection[r*4+k]*clip[k];
+  const double pixels=(previous_clip[0]/previous_clip[3]-x)*320.0;
+  assert(std::abs(pixels-0.9884632896)<1e-5);
+  c.EndFrame();c.BeginFrame();publish_world(102,3);c.PrepareIssNativeCamera();
+  assert(ready(c));
+  for(int i=0;i<16;++i)assert(std::abs(c.native_reprojection[i]-float(i%5==0))<1e-5);
+  c.EndFrame();c.BeginFrame();publish_world(103,3);latest.view_transform[0]=NAN;
+  c.PrepareIssNativeCamera();assert(!ready(c)&&!c.native_previous_valid);
  }else return 2;
 }
 '''
@@ -137,7 +169,7 @@ int main(int argc,char**argv){
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.cpp').write_text(harness)
             subprocess.run(['c++','-std=c++20','-DISS_ANDROID_BIONIC','-Wall','-Wextra','-Werror','-I'+str(ROOT/'port'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
-            for case in ('repeat','double','validation','pause','gates','queued'):
+            for case in ('repeat','double','validation','pause','gates','queued','world_translation'):
                 with self.subTest(case=case):
                     subprocess.run([str(p/'test'),case],check=True)
 

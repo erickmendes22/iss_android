@@ -257,6 +257,26 @@ void CameraMotion::PrepareIssNativeCamera() {
             }
         }
     }
+    // +0x430 is camera-relative: its inverse is valid but contains no world
+    // translation. +0x200 has the same basis and the missing translated row.
+    // view_transform * inverse(composite) must therefore be a translation.
+    std::array<double, 3> camera_origin{};
+    for (int row = 0; row < 4 && inverse_ok; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            double value = 0.0;
+            for (int k = 0; k < 4; ++k) {
+                value += double(sample.view_transform[row * 4 + k]) *
+                         double(sample.inverse[k * 4 + col]);
+            }
+            if (!std::isfinite(value) ||
+                ((row < 3 || col == 3) &&
+                 std::abs(value - double(row == col)) > 0.02)) {
+                inverse_ok = false;
+                break;
+            }
+            if (row == 3 && col < 3) camera_origin[col] = value;
+        }
+    }
     if (!inverse_ok) {
         native_previous_valid = native_motion_valid = false;
         current.valid = previous.valid = false;
@@ -303,10 +323,13 @@ void CameraMotion::PrepareIssNativeCamera() {
     if (native_motion_valid) {
         // PS4/inFAMOUS stores row-vector camera matrices. For a homogeneous
         // CURRENT clip-space row vector, the PREVIOUS clip coordinate is:
-        //   clip_previous = clip_current * inverse(current) * composite(previous)
+        //   clip_previous = clip_current * inverse(relative_current) *
+        //                   T(C_current-C_previous) * relative_previous
         // The GLSL shader instead computes dot(row, column_vector), so upload
         // the TRANSPOSE of this product. The earlier previous*inverse product
         // was mathematically incorrect despite passing camera-inverse checks.
+        // Inverse validation alone also cannot establish that a camera-relative
+        // matrix contains world translation: it does not.
         // For a captured static-camera jitter pair the correct transform has
         // about (+0.00104,-0.00185) XY translation in its last row; the old
         // product wrongly placed motion in the Z-dependent matrix entries.
@@ -318,8 +341,17 @@ void CameraMotion::PrepareIssNativeCamera() {
                     // C[row,col] = sum_k inv(current)[col,k] * prev[k,row].
                     // The old indices computed transpose(prev * inv(current)),
                     // leaving camera reprojected vectors near zero during motion.
-                    value += double(sample.inverse[col * 4 + k]) *
-                             double(native_previous_composite[k * 4 + row]);
+                    double previous_clip = native_previous_composite[k * 4 + row];
+                    if (k == 3) {
+                        // inv(relative_current) * T(C_current-C_previous) *
+                        // relative_previous; camera_origin stores -C.
+                        for (int axis = 0; axis < 3; ++axis) {
+                            previous_clip +=
+                                (native_previous_origin[axis] - camera_origin[axis]) *
+                                double(native_previous_composite[axis * 4 + row]);
+                        }
+                    }
+                    value += double(sample.inverse[col * 4 + k]) * previous_clip;
                 }
                 if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
                     native_motion_valid = false;
@@ -333,6 +365,7 @@ void CameraMotion::PrepareIssNativeCamera() {
     }
     std::memcpy(native_previous_composite.data(), sample.composite,
                 sizeof(sample.composite));
+    native_previous_origin = camera_origin;
     native_previous_object = sample.guest_object;
     native_previous_sequence = sequence;
     native_previous_jitter_ndc = guest_jitter_ndc;

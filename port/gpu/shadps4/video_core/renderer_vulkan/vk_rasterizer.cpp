@@ -325,6 +325,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
 #ifdef ISS_ANDROID_BIONIC
+        upscaler->ObserveIssSceneDepth(db_desc.first);
         // Discover whether ISS exports native motion vectors in its MRTs.
         // A camera inferred from one object's transform would corrupt temporal history.
         // Read attachment descriptors only (no image download or GPU wait).
@@ -1338,10 +1339,16 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
+#ifdef ISS_ANDROID_BIONIC
+    if (!regs.IsClipDisabled() && regs.depth_control.depth_enable) {
+        draw_jitter = upscaler->IssGeometryJitter(db_desc.first);
+    }
+#else
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
+#endif
     if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {
@@ -1550,9 +1557,15 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         pipeline->BindResources(set_writes, set_write_index, push_data);
     }
     draw_jitter = {};
+#ifdef ISS_ANDROID_BIONIC
+    if (!regs.IsClipDisabled() && regs.depth_control.depth_enable) {
+        draw_jitter = upscaler->IssGeometryJitter(db_desc.first);
+    }
+#else
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
+#endif
     if (!native_graphics) UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     if (FrameRecord::IsRecording()) [[unlikely]] {

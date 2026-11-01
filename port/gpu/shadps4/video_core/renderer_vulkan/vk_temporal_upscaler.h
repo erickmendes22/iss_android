@@ -23,6 +23,9 @@
 #include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "video_core/renderer_vulkan/iss_scene_jitter.h"
+#endif
 #include "video_core/texture_cache/image.h"
 
 struct FfxVkPortableUpscaleContext;
@@ -88,6 +91,10 @@ public:
     [[nodiscard]] std::array<float, 2> Jitter() const noexcept {
         return done_this_frame ? std::array<float, 2>{} : jitter;
     }
+#ifdef ISS_ANDROID_BIONIC
+    void ObserveIssSceneDepth(VideoCore::ImageId depth);
+    std::array<float, 2> IssGeometryJitter(VideoCore::ImageId depth) const;
+#endif
 
     // Scaled presets.
 
@@ -229,6 +236,7 @@ private:
     VideoCore::ImageId iss_aa_prefilter{}; // exact current-frame AA source; compatible LDR may feed FSR
     struct {u64 address{}; u32 format{}, width{}, height{};} iss_aa_capture;
     bool iss_fsr_used_original_aa{};
+    IssSceneJitter iss_scene_jitter;
 #endif
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass

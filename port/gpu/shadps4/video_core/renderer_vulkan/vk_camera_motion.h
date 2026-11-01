@@ -50,6 +50,9 @@ public:
         previous_jitter = jitter;
         jitter = value;
     }
+#ifdef ISS_ANDROID_BIONIC
+    void SetEffectiveJitter(std::array<float, 2> value) noexcept { jitter = value; }
+#endif
 
     [[nodiscard]] bool Enabled() const noexcept {
         return debug_overlay || for_upscaler;
@@ -163,6 +166,7 @@ private:
     // Native inFAMOUS camera matrices are x86 row-major 4x4 float matrices,
     // copied from the verified guest update; no guest pointers retained.
     std::array<float, 16> native_previous_composite{};
+    std::array<double, 3> native_previous_origin{};
     TlgIssCameraSnapshot native_submission_camera{};
     std::array<float, 16> native_reprojection{};
     // Game-native projection's subpixel NDC shift (row-vector, row 2).
