@@ -69,8 +69,6 @@ struct Driver {
     }
     vk::Result submit(const vk::SubmitInfo& info,vk::Fence) {
         assert(info.signalSemaphoreCount==1);
-        for(unsigned i=0;i<info.waitSemaphoreCount;++i)
-            assert(info.pWaitDstStageMask[i]==vk::PipelineStageFlagBits::eAllCommands);
         assert(info.commandBufferCount==1 || info.commandBufferCount==2);
         buffers_last=info.commandBufferCount;
         assert(*info.pNext->pSignalSemaphoreValues==submitted+1);
@@ -120,7 +118,6 @@ struct Scheduler {
     Semaphore work_semaphore;
     std::recursive_mutex submit_mutex,pending_ops_mutex;
     std::atomic<unsigned> num_pending_ops{0},work_since_submit{0};
-    std::atomic<u64> submitted_tick{0};
     unsigned pending_polls=0, allocations=0;
     bool popping_pending_ops=false;
     struct Op {std::function<void()> callback;u64 gpu_tick;};
@@ -164,9 +161,7 @@ int main(int argc,char**) {
     // The first eight submits need no timeline query. The ninth refresh confirms a whole batch.
     for(unsigned i=0;i<8;++i) {Vulkan::SubmitInfo info{};scheduler.SubmitExecution(info);}
     assert(driver.queries==0 && callbacks.empty());
-    Vulkan::SubmitInfo info{};info.num_wait_semas=3;
-    scheduler.SubmitExecution(info);
-    assert(scheduler.submitted_tick==9);
+    Vulkan::SubmitInfo info{};scheduler.SubmitExecution(info);
     assert(driver.queries==1 && callbacks.size()==1 && callbacks[0]>=1);
     for(unsigned i=9;i<800;++i) {
         scheduler.parallel=i%2;Vulkan::SubmitInfo next{};scheduler.SubmitExecution(next);

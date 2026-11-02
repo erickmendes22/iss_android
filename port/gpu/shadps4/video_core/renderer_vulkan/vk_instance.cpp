@@ -24,7 +24,6 @@
 #include "video_core/renderer_vulkan/vk_amd_paths.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/buffer_cache/hybrid_readback_policy.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
 #include <vk_mem_alloc.h>
@@ -532,16 +531,10 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    static constexpr std::array queue_priorities = {1.0f, 1.0f};
-    u32 requested_queues = 1;
-#ifdef ISS_ANDROID_BIONIC
-    const char* hybrid = std::getenv("TLG_ISS_HYBRID_READ_PROTECT");
-    requested_queues = VideoCore::HybridReadbackPolicy::RequestedQueueCount(
-        family_properties[queue_family_index].queueCount, hybrid && hybrid[0] == '1');
-#endif
-    vk::DeviceQueueCreateInfo queue_info = {
+    static constexpr std::array queue_priorities = {1.0f};
+    const vk::DeviceQueueCreateInfo queue_info = {
         .queueFamilyIndex = queue_family_index,
-        .queueCount = requested_queues,
+        .queueCount = static_cast<u32>(queue_priorities.size()),
         .pQueuePriorities = queue_priorities.data(),
     };
 
@@ -804,13 +797,6 @@ bool Instance::CreateDevice() {
     }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
-    if (device_result != vk::Result::eSuccess && requested_queues > 1) {
-        // Preserve boot on a driver rejecting an advertised additional queue.
-        queue_info.queueCount = requested_queues = 1;
-        auto retry = physical_device.createDeviceUnique(device_chain.get());
-        device_result = retry.result;
-        dev = std::move(retry.value);
-    }
     if (device_result != vk::Result::eSuccess) {
         LOG_CRITICAL(Render_Vulkan, "Failed to create device: {}", vk::to_string(device_result));
         return false;
@@ -825,7 +811,6 @@ bool Instance::CreateDevice() {
     }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
-    if (requested_queues > 1) readback_queue = device->getQueue(queue_family_index, 1);
     present_queue = device->getQueue(queue_family_index, 0);
 
     if (calibrated_timestamps) {

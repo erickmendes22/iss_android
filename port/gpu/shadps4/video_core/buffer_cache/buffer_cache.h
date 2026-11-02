@@ -22,7 +22,6 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/hybrid_staging_window.h"
-#include "video_core/buffer_cache/hybrid_readback_policy.h"
 #include "video_core/buffer_cache/range_set.h"
 #include "video_core/buffer_cache/readback_copy_pages.h"
 #include "video_core/buffer_cache/write_tick_tracker.h"
@@ -39,7 +38,6 @@ class MemoryManager;
 
 namespace Vulkan {
 class GraphicsPipeline;
-class ReadbackQueue;
 struct SubmitInfo;
 class Runtime;
 class StagingBufferPool;
@@ -231,8 +229,7 @@ private:
     /// to go idle) and writes it back and unmarks it itself. Guest threads touching the same
     /// memory meanwhile wait for the same copy. A GPU write to the memory before the copy is
     /// applied invalidates its copied pages. Native Relaxed mapped reads can publish the
-    /// unaffected pages. Hybrid staging has the same page validity policy; CPU writes
-    /// without a fault invalidate the full snapshot.
+    /// unaffected pages; staging and CPU writes without a fault invalidate the full snapshot.
     /// Invalidation precedes GPU protection (MemoryTracker::ApplyGpuCopyIf); an invalid
     /// requested page retries or falls back. From shadPS4-Infamous-FixBuild ee423726/2d2511fe.
     struct DeferredReadback {
@@ -242,8 +239,7 @@ private:
             const u8* source;
         };
         bool mapped = false;
-        bool queued = false;
-        // Native mapped / Hybrid staging: GPU writes invalidate individual 4-KiB pages.
+        // Native Relaxed mapping: GPU writes invalidate individual 4-KiB pages.
         // The owner alone mutates these fields; applied's release/acquire publishes partial.
         bool page_scoped = false, partial = false;
         IntervalList<> invalid_pages;
@@ -258,7 +254,6 @@ private:
         VAddr start{};
         VAddr end{};
         u64 tick{};
-        u64 source_tick{}; // graphics provenance, independent of the completion queue serial
         std::atomic<bool> stale{};
         std::atomic<bool> applied{};
         /// Won't be applied; its ranges are back in gpu_modified_ranges.
@@ -299,9 +294,6 @@ private:
     bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current = false,
                                u64 wait_tick_limit = 0);
     bool CaptureMappedReadback(DeferredReadback& readback);
-    bool SelectReadbackPages(DeferredReadback& readback);
-    void RecordStagingReadback(const Buffer* arena, DeferredReadback& readback);
-    Vulkan::Semaphore* ReadbackCompletion(const DeferredReadback& readback);
     static bool MappedReadbackPolicy();
     void NoteDeviceWrite(VAddr address, u64 size, u64 tick);
     /// Marks the copies in flight overlapping a range stale. `cpu`: a guest thread is about to
@@ -317,7 +309,6 @@ private:
     /// tlg: batched small copies on the copy threads (TlgCopy::QueueCopy).
     static void RunGuestCopy(const TlgCopy::Item& item);
     void SmallGuestCopy(const TlgCopy::Item& item);
-    const Buffer* StableSmallRead(VAddr address, u32 size, bool texel);
 
     const Buffer* UploadCopies(const Buffer* arena, std::span<vk::BufferCopy> copies,
                                size_t total_size_bytes);
@@ -360,8 +351,6 @@ private:
     std::deque<Buffer> arenas;
     std::vector<ArenaBinds> pending_binds;
     Vulkan::Semaphore memory_semaphore;
-    std::unique_ptr<Vulkan::ReadbackQueue> readback_queue;
-    u64 submitted_residency_tick{};
 
     struct Backing : public Interval {
         vk::DeviceMemory memory;

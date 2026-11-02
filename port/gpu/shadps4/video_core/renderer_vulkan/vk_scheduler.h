@@ -720,8 +720,6 @@ public:
     /// Sends the current execution context to the GPU and waits for it to complete.
     void Finish(std::source_location caller = std::source_location::current());
 
-    u64 SubmittedTick() const noexcept { return submitted_tick.load(std::memory_order_acquire); }
-
     /// tlg: waits for the work submitted so far but leaves the command buffer being
     /// recorded open, so a CommandBuffer() the caller holds stays valid (Finish() submits it:
     /// recording into a submitted buffer crashes AMD's driver).
@@ -1077,7 +1075,6 @@ private:
 private:
     const Instance& instance;
     Semaphore work_semaphore;
-    std::atomic<u64> submitted_tick{0};
     CommandPool command_pool;
     std::unique_ptr<CommandPool> parallel_pool;
     struct NativeSecondaryScope {

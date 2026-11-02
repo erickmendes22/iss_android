@@ -766,11 +766,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
 
-    // Residency, readback WAR and acquire waits can coexist. Every dependency
-    // must cover compute/transfer too; a color-only mask cannot protect arena writes.
-    static constexpr std::array<vk::PipelineStageFlags, 4> wait_stage_masks = {
-        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
+        vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
     };
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {
@@ -798,7 +796,6 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
-    if (submit_result == vk::Result::eSuccess) submitted_tick.store(signal_value, std::memory_order_release);
 
 #ifndef ISS_ANDROID_BIONIC
     work_semaphore.Refresh();

@@ -94,8 +94,6 @@ public:
         return graphics_queue;
     }
 
-    vk::Queue GetReadbackQueue() const { return readback_queue; }
-
     vk::Queue GetPresentQueue() const {
         return present_queue;
     }
@@ -583,7 +581,6 @@ private:
     VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
-    vk::Queue readback_queue;
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
