@@ -16,6 +16,7 @@
 #include "common/interval_set.h"
 #include "video_core/buffer_cache/readback_copy_pages.h"
 #include "video_core/buffer_cache/write_tick_tracker.h"
+#include "video_core/buffer_cache/hybrid_readback_policy.h"
 #include "video_core/buffer_cache/hybrid_staging_window.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 using u8=uint8_t; using u32=uint32_t; using u64=uint64_t; using VAddr=u64;
@@ -83,9 +84,9 @@ struct Instance {
     u64 NonCoherentAtomSize()const{return 256;}
 };
 struct Semaphore {
-    u64 completed=5,waited=0;
+    u64 completed=5,waited=0,submitted=9;
     bool IsFree(u64 tick)const{return completed>=tick;}
-    void Wait(u64 tick){assert(tick<=10);waited=tick;completed=std::max(completed,tick);}
+    void Wait(u64 tick){assert(tick<=submitted);waited=tick;completed=std::max(completed,tick);}
 };
 struct Scheduler {
     Semaphore sem;u64 current=10;unsigned flushes=0;
@@ -95,7 +96,7 @@ struct Scheduler {
     u64 CurrentTick()const{return current;}
     bool IsFree(u64 tick)const{return sem.IsFree(tick);}
     auto* GetWorkSemaphore(){return &sem;}
-    void Flush(){++flushes;FlushHostReadBarrier();if(complete_on_flush)sem.completed=current; ++current;}
+    void Flush(){++flushes;FlushHostReadBarrier();sem.submitted=current;if(complete_on_flush)sem.completed=current; ++current;}
     void FlushHostReadBarrier();
     // PRODUCTION_REQUIRE_BARRIER
 };
@@ -206,6 +207,12 @@ struct BufferCache {
     void MarkDeferredStale(VAddr,u64,bool);
     bool PrepareMappedReadback(DeferredReadback&,u64,bool=false,u64=0);
     bool CaptureMappedReadback(DeferredReadback&);
+    bool SelectReadbackPages(DeferredReadback&);
+    auto* ReadbackCompletion(const DeferredReadback& r){assert(!r.queued);return scheduler.GetWorkSemaphore();}
+    void RecordStagingReadback(const Buffer* a, DeferredReadback& r){
+        runtime.CopyBuffer(a,r.staging.buffer,r.copies);
+        r.source_tick=r.tick=scheduler.CurrentTick();scheduler.Flush();
+    }
     u64 CollectDownloads(const Buffer*,VAddr,u64,boost::container::small_vector<vk::BufferCopy,8>&);
     std::shared_ptr<DeferredReadback> StartDeferredReadback(VAddr,u64);
     bool FinishDeferredReadback(DeferredReadback&,bool);
@@ -220,7 +227,8 @@ int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
     const bool targeted=mode=="hybrid_targeted_pages";
     if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
-    const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap";
+    const bool hybrid_stage=mode.starts_with("hybrid_stage_");
+    if(mode=="hybrid_stage_off")setenv("TLG_HYBRID_STAGE_PARTIAL","0",1);
     VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted;
     const bool partial=mode.starts_with("partial_");
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
@@ -388,13 +396,37 @@ int main(int argc,char** argv) {
         // Real Start/NoteDeviceWrite/Finish methods: no test-only stale logic.
         assert(!r->mapped && !r->applied && c.deferred_count==1);
         assert(r->tick==10);
-        if (mode=="hybrid_stage_write") {
-            c.NoteDeviceWrite(base+0x3ff0,4,r->tick+1);
-            assert(r->stale);
-            assert(!c.FinishDeferredReadback(*r,true));
-            assert(c.mem.published.empty());
-            c.RecoverDeferredReadback(*r);
-            assert(r->recovered && !c.gpu_modified_ranges.intervals.empty());
+        if (mode!="hybrid_stage_gap") {
+            const bool cpu=mode=="hybrid_stage_cpu", all=mode=="hybrid_stage_all";
+            if(cpu)c.MarkDeferredStale(base+0x3ff0,4,true);
+            else if(mode=="hybrid_stage_recheck")c.write_ticks.Write(base+0x3ff0,4,r->source_tick+1);
+            else c.NoteDeviceWrite(base+0x3ff0,all?0x120:4,r->source_tick+1);
+            if(cpu || mode=="hybrid_stage_off") {
+                assert(r->stale && !c.FinishDeferredReadback(*r,true));
+                assert(c.mem.published.empty());c.RecoverDeferredReadback(*r);
+                assert(r->recovered && !c.gpu_modified_ranges.intervals.empty());
+            }else if(all) {
+                assert(!c.FinishDeferredReadback(*r,true) && r->stale);
+                assert(c.mem.published.empty());c.RecoverDeferredReadback(*r);
+            }else{
+                assert(!r->stale && r->page_scoped);
+                assert(c.FinishDeferredReadback(*r,true) && r->partial);
+                // Every island on the changed page stays protected. The other
+                // page publishes both its dirty islands from the existing copy.
+                assert(c.mem.published.size()==32);
+                assert(c.tracker.IsRegionGpuModified(base+0x3ff0,4));
+                assert(!c.tracker.IsRegionGpuModified(base+0x4000,4));
+                assert(!c.tracker.IsRegionGpuModified(base+0x4100,4));
+                assert(!c.mem.published.contains(base+0x3ff0));
+                // Finish's retry must not overwrite a newer CPU byte on a page
+                // already published by the first partial staging snapshot.
+                c.mem.published[base+0x4100]=203;
+                c.gpu_modified_ranges.Add(base+0x3ff0,4);
+                auto fresh=c.StartDeferredReadback(base+0x3ff0,4);assert(fresh && fresh!=r);
+                assert(c.FinishDeferredReadback(*fresh,true));
+                assert(c.mem.published.at(base+0x4100)==203);
+                assert(!c.tracker.IsRegionGpuModified(base+0x3ff0,4));
+            }
         } else {
             // A write on a clean page inside the same 512-KiB window
             // must not invalidate a copy of unrelated GPU-dirty islands.
@@ -405,7 +437,7 @@ int main(int argc,char** argv) {
         }
         c.PruneDeferredReadbacks();
         assert(c.deferred_readbacks.empty());
-        assert(c.staging_pool.freed==1);
+        assert(c.staging_pool.freed==c.staging_pool.allocations);
         return 0;
     }
     if(mode=="ready" || mode=="currentready") {

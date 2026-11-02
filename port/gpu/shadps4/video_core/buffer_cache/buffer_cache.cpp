@@ -22,6 +22,7 @@
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_vulkan/vk_readback_queue.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -81,6 +82,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
+    if (RegionManager::HybridReadProtectionEnabled() && instance.GetReadbackQueue()) {
+        readback_queue = std::make_unique<Vulkan::ReadbackQueue>(instance);
+    }
 #endif
     // tlg: TLG_MAX_BUFFER_MB lowers the driver's buffer size limit as the arenas see it
     // (diagnostics: reproduces AMD on Windows 2048, RADV 4095 on any GPU).
@@ -156,6 +160,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 }
 
 BufferCache::~BufferCache() {
+    readback_queue.reset(); // complete private copies before freeing arena/staging storage
     runtime.SetBufferWriteHook(nullptr, nullptr);
     for (const auto& [allocation, mapping] : residency_mappings) {
         if (mapping.data) instance.GetDevice().unmapMemory(allocation);
@@ -334,6 +339,21 @@ std::tuple<const Buffer*, VAddr, VAddr> BufferCache::GetReadbackWindow(VAddr dev
         std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
     const VAddr window_end = std::min<VAddr>(
         std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
+    if (HybridReadbackPolicy::RequestPages() && RegionManager::HybridReadProtectionEnabled() &&
+        !EmulatorSettings.IsDirectMemoryAccessEnabled() && size && size <= 4096) {
+        const VAddr first = std::max<VAddr>(Common::AlignDown(device_addr, u64{4096}), arena->cpu_addr);
+        const VAddr last = std::min<VAddr>(Common::AlignUp(device_addr + size, u64{4096}), arena_end);
+        u64 requested = 0;
+        bool known = true;
+        for (VAddr page = first; page < last; page += 4096) {
+            const u64 tick = write_ticks.Latest(page, 4096);
+            known &= tick != 0;
+            requested = std::max(requested, tick);
+        }
+        const u64 surrounding = write_ticks.Latest(window_start, window_end - window_start);
+        if (known && requested && surrounding > requested && scheduler.IsFree(requested) &&
+            !scheduler.IsFree(surrounding)) return {arena, first, last};
+    }
     return {arena, window_start, window_end};
 }
 
@@ -411,7 +431,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                         // the owner instead of waiting its obsolete tick/publication.
                         if (readback->stale.load(std::memory_order_acquire) ||
                             readback->recovered.load(std::memory_order_acquire)) return;
-                        scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                        ReadbackCompletion(*readback)->Wait(readback->tick);
                         if (readback->stale.load(std::memory_order_acquire) ||
                             readback->recovered.load(std::memory_order_acquire)) return;
                         liverpool->SendCommand<true, true>([&] {
@@ -608,6 +628,36 @@ void PrintBufferStats() {
 }
 } // namespace
 
+const Buffer* BufferCache::StableSmallRead(VAddr address, u32 size, bool texel) {
+#ifdef ISS_ANDROID_BIONIC
+    static const bool enabled = [] {
+        const char* p = std::getenv("TLG_STABLE_SMALL_READ"); return !p || p[0] != '0';
+    }();
+    // Reuse only an existing CPU-clean arena. No remembered guest bytes, no
+    // speculative promotion of dirty stream pages, and no new sparse allocation.
+    if (!enabled || texel || !size || size > STREAM_THRESHOLD || !address ||
+        address >= (u64{1} << ADDRESS_SPACE_BITS) ||
+        size > (u64{1} << ADDRESS_SPACE_BITS) - address ||
+        memory_tracker->IsRegionCpuModified(address, size) ||
+        memory_tracker->IsRegionGpuModified(address, size)) return nullptr;
+    const auto* arena = address_space[address >> arena_page_bits];
+    if (!arena || !arena->IsInBounds(address, size) ||
+        arena->Offset(address) % instance.UniformMinAlignment()) return nullptr;
+    bool resident = true;
+    resident_ranges.ForEachGap(address >> block_shift, ((address + size - 1) >> block_shift) + 1,
+                              [&](u64, u64) { resident = false; });
+    if (!resident || runtime.IsBufferAccessed(arena, arena->Offset(address), size)) return nullptr;
+    // Use current page state and current arena identity on every binding. Native
+    // writes/remaps cannot make a cached stamp return a stale "clean" result.
+    if (memory_tracker->IsRegionCpuModified(address, size) ||
+        memory_tracker->IsRegionGpuModified(address, size)) return nullptr;
+    return arena;
+#else
+    (void)address; (void)size; (void)texel;
+    return nullptr;
+#endif
+}
+
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
     if (is_written) {
@@ -621,6 +671,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     }
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
     if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size)) {
+        if (const auto* stable = StableSmallRead(device_addr, size, is_texel_buffer))
+            return {stable, stable->Offset(device_addr)};
         if (stats) {
             auto& region = Stats().regions[RegionKey(device_addr)];
             ++region.stream_count;
@@ -1233,13 +1285,14 @@ void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
     for (const auto& readback : deferred_readbacks) {
         if (!readback->Done() &&
             readback->CopiesTouchPages(address, address + size)) {
-            if (!readback->mapped) {
+            if (!readback->mapped && !readback->page_scoped) {
                 // A staging copy was captured at readback->tick. If a later GPU
                 // submission overwrites a copied page, its old contents must not
                 // reach guest memory or unprotect that page. The existing
                 // recovery/retry path will fetch the newer GPU contents.
                 // Only enabled on hybrid, not for the ordinary Relaxed policy.
-                if (RegionManager::HybridReadProtectionEnabled() && tick > readback->tick) {
+                if (RegionManager::HybridReadProtectionEnabled() &&
+                    tick > (readback->source_tick ? readback->source_tick : readback->tick)) {
                     readback->stale.store(true, std::memory_order_release);
                 }
             } else if (readback->page_scoped &&
@@ -1331,18 +1384,14 @@ bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, b
     return true;
 }
 
-bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
-    // Only the Relaxed cache owner publishes these reads. No device pointer is read
-    // until the old submission (including its HOST_READ barrier) has completed.
-    if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
-        EmulatorSettings.IsDirectMemoryAccessEnabled() ||
-        !scheduler.GetWorkSemaphore()->IsFree(readback.tick)) return false;
+bool BufferCache::SelectReadbackPages(DeferredReadback& readback) {
+    const u64 source_tick = readback.source_tick ? readback.source_tick : readback.tick;
     readback.publication_copies.clear();
     readback.retry_copies.clear();
     for (const auto& copy : readback.copies) {
         const VAddr start = readback.arena_base + copy.srcOffset, end = start + copy.size;
         const bool changed = readback.invalid_pages.Overlaps(start, end) ||
-                             write_ticks.Latest(start, copy.size) > readback.tick;
+                             write_ticks.Latest(start, copy.size) > source_tick;
         if (!changed) {
             // Keep the normal all-valid path at one interval check per copy.
             readback.publication_copies.push_back(copy);
@@ -1353,7 +1402,7 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
             const VAddr page = Common::AlignDown(at, u64{4096});
             const VAddr hi = std::min(end, page + 4096);
             const bool changed = readback.invalid_pages.Overlaps(page, page + 4096) ||
-                                 write_ticks.Latest(page, 4096) > readback.tick;
+                                 write_ticks.Latest(page, 4096) > source_tick;
             auto& parts = changed ? readback.retry_copies : readback.publication_copies;
             parts.push_back(vk::BufferCopy{.srcOffset = at - readback.arena_base,
                                           .dstOffset = copy.dstOffset + at - start,
@@ -1366,6 +1415,17 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
         readback.stale.store(true, std::memory_order_release);
         return false;
     }
+    readback.partial = !readback.retry_copies.empty();
+    return true;
+}
+
+bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
+    // Only the Relaxed cache owner publishes these reads. No device pointer is read
+    // until the old submission (including its HOST_READ barrier) has completed.
+    if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
+        EmulatorSettings.IsDirectMemoryAccessEnabled() ||
+        !scheduler.GetWorkSemaphore()->IsFree(readback.tick)) return false;
+    if (!SelectReadbackPages(readback)) return false;
     readback.mapped_snapshot.resize(readback.snapshot_size);
     const auto device = instance.GetDevice();
     const u64 atom = instance.NonCoherentAtomSize();
@@ -1391,6 +1451,47 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
     }
     readback.partial = !readback.retry_copies.empty();
     return true;
+}
+
+Vulkan::Semaphore* BufferCache::ReadbackCompletion(const DeferredReadback& readback) {
+    return readback.queued ? &readback_queue->Timeline() : scheduler.GetWorkSemaphore();
+}
+
+void BufferCache::RecordStagingReadback(const Buffer* arena, DeferredReadback& readback) {
+    readback.source_tick = scheduler.CurrentTick();
+    u64 producer = 0;
+    bool known = readback_queue && !readback.copies.empty() && pending_binds.empty() &&
+                 !EmulatorSettings.IsDirectMemoryAccessEnabled();
+    if (known) for (const auto& copy : readback.copies) {
+        const VAddr start = readback.arena_base + copy.srcOffset;
+        const VAddr end = start + copy.size;
+        // A maximum over the whole interval cannot prove that every page has
+        // known provenance: a known neighbor must not mask an unknown producer.
+        for (VAddr at = start; at < end;) {
+            const VAddr next = std::min(end, Common::AlignDown(at, u64{4096}) + 4096);
+            const u64 tick = write_ticks.Latest(at, next - at);
+            known &= tick != 0;
+            producer = std::max(producer, tick);
+            at = next;
+        }
+    }
+    // Never wait on an unsubmitted producer from another queue. A new arena
+    // alias also needs its pending sparse binds before a private copy can use it.
+    if (readback_queue && known && pending_binds.empty() &&
+        producer <= scheduler.SubmittedTick() && !EmulatorSettings.IsDirectMemoryAccessEnabled()) {
+        const u64 tick = readback_queue->Submit(arena->Handle(), readback.staging.buffer->Handle(),
+            readback.copies, scheduler.GetWorkSemaphore()->Handle(), producer,
+            memory_semaphore.Handle(), submitted_residency_tick);
+        if (tick) {
+            readback.source_tick = producer;
+            readback.tick = tick;
+            readback.queued = true;
+            return;
+        }
+    }
+    runtime.CopyBuffer(arena, readback.staging.buffer, readback.copies);
+    readback.source_tick = readback.tick = scheduler.CurrentTick();
+    scheduler.Flush();
 }
 
 std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadback(VAddr device_addr,
@@ -1428,14 +1529,15 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                     continue;
                 }
                 if (readback->mapped && wait_tick_limit && readback->tick > wait_tick_limit &&
-                    !scheduler.GetWorkSemaphore()->IsFree(readback->tick)) {
+                    !ReadbackCompletion(*readback)->IsFree(readback->tick)) {
                     // Its wider prefetch waits longer than our own data needs.
                     // Settlement below recovers it without waiting on the owner.
                     continue;
                 }
                 if (readback->page_scoped &&
                     (readback->invalid_pages.Overlaps(device_addr, device_addr + size) ||
-                     write_ticks.Latest(device_addr, size) > readback->tick)) {
+                     write_ticks.Latest(device_addr, size) >
+                         (readback->source_tick ? readback->source_tick : readback->tick))) {
                     // This caller needs newer data. Do not make it wait the old tick
                     // and then the new one. Settle below salvages an already-ready
                     // neighbor or recovers without blocking if the old tick is in flight.
@@ -1494,6 +1596,8 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         readback->arena_base = arena->cpu_addr;
         readback->start = start;
         readback->end = end;
+        readback->page_scoped = !mapped_attempt && !try_mapped &&
+            HybridReadbackPolicy::PartialStaging() && RegionManager::HybridReadProtectionEnabled();
         total_size_bytes = 0;
         bool selected = false;
         if (targeted_now) {
@@ -1546,9 +1650,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         for (auto& copy : readback->copies) {
             copy.dstOffset += readback->staging.offset;
         }
-        runtime.CopyBuffer(arena, readback->staging.buffer, readback->copies);
-        readback->tick = scheduler.CurrentTick();
-        scheduler.Flush();
+        RecordStagingReadback(arena, *readback);
         break;
     }
     // A submitted write may already be complete when the fault first reaches the
@@ -1572,7 +1674,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
 
 bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) {
     if (wait) {
-        scheduler.GetWorkSemaphore()->Wait(readback.tick);
+        ReadbackCompletion(readback)->Wait(readback.tick);
     }
     std::scoped_lock lock{readback.mutex};
     if (readback.applied.load(std::memory_order_acquire)) {
@@ -1591,6 +1693,7 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
         }
         mapped = readback.mapped_snapshot.data();
     } else {
+        if (readback.page_scoped && !SelectReadbackPages(readback)) return false;
         readback.staging.Invalidate();
         mapped = readback.staging.mapped - readback.staging.offset;
     }
@@ -1598,7 +1701,8 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
     // Apply/unprotect only pages that were actually copied, never the entire window.
     // Copies on the same page are grouped: unmarking the page after the first copy
     // would otherwise prevent the remaining copies from being published.
-    const auto& copies = readback.mapped ? readback.publication_copies : readback.copies;
+    const auto& copies = readback.mapped || readback.page_scoped
+        ? readback.publication_copies : readback.copies;
     bool applied = true;
     ForEachReadbackCopyPageGroup(
         readback.arena_base, copies,
@@ -1679,12 +1783,12 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_
     for (const auto& readback : overlapping) {
         const bool wider_wait = readback->mapped && wait_tick_limit &&
             readback->tick > wait_tick_limit &&
-            !scheduler.GetWorkSemaphore()->IsFree(readback->tick);
+            !ReadbackCompletion(*readback)->IsFree(readback->tick);
         if (wider_wait && ReadbackStatsEnabled()) Readbacks().mapped_wider_wait_bypassed.fetch_add(1);
         // A stale copy won't be applied: no need to wait for it (2d2511fe).
         const bool changed_in_flight = readback->page_scoped &&
             !readback->invalid_pages.Empty() &&
-            !scheduler.GetWorkSemaphore()->IsFree(readback->tick);
+            !ReadbackCompletion(*readback)->IsFree(readback->tick);
         // Do not turn the old no-wait stale recovery into a GPU-owner stall.
         // Salvage partial snapshots only when ready; otherwise recollect conservatively.
         if (wider_wait || readback->stale.load() || changed_in_flight ||
@@ -2231,6 +2335,10 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
 }
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
+    // All future graphics work waits for preceding private reads: arena writes
+    // cannot race an in-flight copy, even when no sparse bind is pending.
+    if (readback_queue && readback_queue->LastTick())
+        info.AddWait(readback_queue->Timeline().Handle(), readback_queue->LastTick());
     if (pending_binds.empty()) {
         return;
     }
@@ -2265,6 +2373,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     info.AddWait(signal_sema, signal_tick);
     const auto bind_start = std::chrono::steady_clock::now();
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+    if (submit_result == vk::Result::eSuccess) submitted_residency_tick = signal_tick;
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     const auto elapsed = std::chrono::steady_clock::now() - bind_start;
     // Sparse binds are reported to get slower the more memory is bound on NVIDIA drivers. Log the

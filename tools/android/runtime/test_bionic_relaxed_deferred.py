@@ -150,6 +150,8 @@ struct BufferCache {
     }
     static bool DeferredReadbackEnabled();
     bool FinishDeferredReadback(DeferredReadback&,bool);
+    auto* ReadbackCompletion(const DeferredReadback& r){(void)r;return scheduler.GetWorkSemaphore();}
+    bool SelectReadbackPages(DeferredReadback&){assert(false);return false;}
     void ReadMemory(VAddr,u64,bool,bool,const std::function<bool()>& = {});
 };
 '''

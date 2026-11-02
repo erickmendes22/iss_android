@@ -97,6 +97,8 @@ jobs:
         run: |
           VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
             python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_mapped_readback.py' -v
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_readback_producers.py' -v
       - name: Validate buffer barriers against pinned Vulkan-Headers and Turnip cache reference
         shell: bash -el {0}
         run: |
