@@ -22,3 +22,25 @@ The scheduler now records the latest successfully driver-submitted graphics tick
 - CI runs these tests again with its pinned Vulkan headers, then builds the complete ARM64/Bionic renderer and signs/verifies the APK. No phone FPS or image-correctness result is inferred from host tests.
 
 Developer fallbacks: `TLG_HYBRID_STAGE_PARTIAL=0`, `TLG_HYBRID_REQUEST_PAGES=0`, `TLG_READBACK_QUEUE=0`, `TLG_STABLE_SMALL_READ=0`. Single-queue drivers automatically retain the graphics submission path. The new queue is requested only for protected Hybrid, preserving ordinary Relaxed's queue configuration. Existing eager backoff/targeted-staging experiments and texture GC thresholds remain unchanged.
+
+## Build dependency recovery
+
+Build 72 passed runtime tests, including the new pinned-header producer/queue tests,
+but failed before renderer compilation: Bloodframe's pinned DXBC submodule repository
+`PancakeTAS/dxbc` is no longer public. No DXBC version is substituted.
+
+The performance workflow explicitly opts into `ISS_BLOODFRAME_BOOTSTRAP=1` to recover
+only the unchanged AArch64 `libbloodframe.so` and its five license/provenance files
+from our successful build 71 APK (run 41363054526, artifact 13106552333). The manifest
+pins the Actions ZIP, APK, runtime and all six extracted file hashes. It also pins
+the Bloodframe commit, C API header and existing host-sync patch; changing those
+inputs rejects reuse. The renderer, CPU runtime, driver and launcher build from
+the new source as usual. Archive corruption and changed inputs fail before writes;
+GitHub authorization is removed on the signed-blob redirect.
+
+This is a temporary dependency bootstrap, not a new Bloodframe source distribution.
+The pinned Actions artifact expires 2027-01-30; after expiration CI fails clearly
+unless the exact source or another verified dependency cache has been restored.
+Ordinary builds without the opt-in still compile Bloodframe from source. A local
+verified download can be supplied to `stage_bloodframe_bootstrap.py --archive ZIP
+--commit c29027555cfa8c9fc73c20f03816230becb9f469 --output out/bionic`.

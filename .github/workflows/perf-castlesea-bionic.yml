@@ -4,6 +4,7 @@ on:
     branches: [experimental-bionic]
 permissions:
   contents: read
+  actions: read
 # One run for the PR. A newer commit cancels the older run before starting.
 concurrency:
   group: iss-bionic-perf-pr-${{ github.event.pull_request.number }}
@@ -110,6 +111,9 @@ jobs:
           VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
             python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_parallel_recording.py' -v
       - name: Build Bloodframe and direct PKG extractor
+        env:
+          ISS_BLOODFRAME_BOOTSTRAP: '1'
+          GH_TOKEN: ${{ github.token }}
         shell: bash -el {0}
         run: |
           bash tools/android/bionic/build_bloodframe.sh
