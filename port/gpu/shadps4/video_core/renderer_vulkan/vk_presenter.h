@@ -43,6 +43,10 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
+#ifdef ISS_ANDROID_BIONIC
+    int capture_index = -1;
+    u64 capture_serial = 0, captured_ahb_serial = 0;
+#endif
 
 };
 

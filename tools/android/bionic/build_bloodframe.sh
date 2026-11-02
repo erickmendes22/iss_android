@@ -22,6 +22,12 @@ api=${ISS_BIONIC_API:-30}
 J=${ISS_JOBS:-2}
 out=$PWD/out/bionic
 build=$out/bloodframe-build
+# Explicit CI recovery from our last verified APK while upstream DXBC is unavailable.
+# Default builds still compile Bloodframe from the pinned source below.
+if [[ ${ISS_BLOODFRAME_BOOTSTRAP:-0} == 1 ]]; then
+    python3 tools/android/bionic/stage_bloodframe_bootstrap.py --commit "$BLOODFRAME_COMMIT" --output "$out"
+    exit 0
+fi
 [[ -f $ndk/build/cmake/android.toolchain.cmake ]] || { echo "No NDK: $ndk (tools/android/build_bionic_deps.sh)" >&2; exit 1; }
 if [[ ! -d $src/.git ]]; then
     mkdir -p "$root/src"

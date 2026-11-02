@@ -53,6 +53,9 @@ struct Instance {
 struct Scheduler {
     VertexInputState vertex_input_state;
     bool recording_threaded = true, direct_mode = false, switch_direct = false;
+    bool native_secondary_enabled = false, is_rendering = false;
+    std::atomic<std::uint64_t> descriptor_stream_epoch{1};
+    void EndRendering() { is_rendering = false; }
     bool owner_invalidates = false;
     unsigned owner_checks = 0;
     std::atomic<unsigned> direct_recordings{};

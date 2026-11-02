@@ -1,5 +1,6 @@
 """Execute production camera preparation and frame cleanup without a GPU."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -15,11 +16,13 @@ class CameraFrameLatch(unittest.TestCase):
         cleanup=source[source.index('    if (!frame_has_camera) InvalidateHistory();'):
                        source.index('\n}\n\nvoid CameraMotion::Overlay')]
         fields=header[header.index('    std::array<float, 16> native_previous_composite'):
-                      header.index('    struct BindingSample')]
+                      header.index('\n#endif\n    bool frame_has_camera')]
         invalidate=header[header.index('    void InvalidateHistory()'):
                           header.index('    void SetObjectMotion')]
-        setter=header[header.index('    void SetIssSubmissionCamera('):
+        setter=header[header.index('    void SetIssSubmissionCameraSet('):
                       header.index('    // Latch the submission')]
+        observe=source[source.index('void CameraMotion::ObserveGBufferBinding('):source.index('\n#endif\n\nvoid CameraMotion::OnConstants')]
+        need=header[header.index('    [[nodiscard]] bool NeedGBufferSamples('):header.index('    void ObserveGBufferBinding(')]
         harness=r'''
 #include <array>
 #include <cassert>
@@ -27,6 +30,8 @@ class CameraFrameLatch(unittest.TestCase):
 #include <cstdio>
 #include <cstring>
 #include "gpu/tlggpu.h"
+#include "gpu/shim/iss_scene_camera.h"
+#include "gpu/shim/iss_fsr_diagnostics.h"
 using u32=uint32_t;using u64=uint64_t;
 static TlgIssCameraSnapshot latest{};
 extern "C" uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot* out){*out=latest;return out->sequence;}
@@ -38,6 +43,11 @@ public:
  FIELDS
  INVALIDATE
  SETTER
+ // Test-only injection to compare the former latest-camera policy against
+ // the production scene-bound selector. No runtime API bypasses selection.
+ void SetIssSubmissionCamera(const TlgIssCameraSnapshot& s){native_submission_camera=s;}
+ NEED
+ void ObserveGBufferBinding(u64,u32,u32,const void*);
  void PrepareIssNativeCamera();
  void PrepareSubmitted(){PrepareIssNativeCamera();}
  void EndFrame(){
@@ -46,14 +56,31 @@ CLEANUP
  void BeginFrame(){depth_id=1;}
 };
 METHOD
+OBSERVE
 static void publish(u64 seq,float x,u64 object=0x100){
  latest={};latest.sequence=seq;latest.guest_object=object;
  for(int i:{0,5,10,15})latest.composite[i]=latest.inverse[i]=latest.projection[i]=1;
  latest.composite[12]=x;latest.inverse[12]=-x;
+ std::memcpy(latest.view_transform,latest.composite,sizeof(latest.composite));
  latest.near_plane=10;latest.far_plane=10000000;
  latest.vertical_fov=1;latest.aspect=16.f/9;
 }
 static bool ready(const CameraMotion& c){return c.native_motion_valid&&c.current.valid&&c.previous.valid;}
+static void publish_world(u64 seq,float camera_x){
+ publish(seq,0);
+ latest.projection[0]=latest.composite[0]=1.02964926f;
+ latest.projection[5]=latest.composite[5]=1.83048773f;
+ latest.projection[10]=latest.composite[10]=-1.00000102e-6f;
+ latest.projection[11]=latest.composite[11]=1.f;
+ latest.projection[14]=latest.composite[14]=10.0000095f;
+ latest.projection[15]=latest.composite[15]=0.f;
+ std::memset(latest.inverse,0,sizeof(latest.inverse));
+ latest.inverse[0]=1.f/latest.composite[0];latest.inverse[5]=1.f/latest.composite[5];
+ latest.inverse[11]=1.f/latest.composite[14];latest.inverse[14]=1.f;
+ latest.inverse[15]=-latest.composite[10]/latest.composite[14];
+ std::memcpy(latest.view_transform,latest.composite,sizeof(latest.composite));
+ for(int j=0;j<4;++j)latest.view_transform[12+j]-=camera_x*latest.composite[j];
+}
 int main(int argc,char**argv){
  assert(argc==2);
  if(!std::strcmp(argv[1],"repeat")){
@@ -126,6 +153,67 @@ int main(int argc,char**argv){
   c.BeginFrame();c.PrepareIssNativeCamera();assert(!ready(c));
   c.EndFrame();c.BeginFrame();publish(3,0);c.PrepareIssNativeCamera();assert(!ready(c));
   c.EndFrame();c.BeginFrame();publish(4,0);c.PrepareIssNativeCamera();assert(ready(c));
+ }else if(!std::strcmp(argv[1],"world_translation")){
+  CameraMotion c;publish_world(100,0);c.PrepareIssNativeCamera();c.EndFrame();
+  c.BeginFrame();publish_world(101,3);c.PrepareIssNativeCamera();assert(ready(c));
+  const double x=-3.0*latest.projection[0]/1000.0;
+  const double depth=latest.projection[10]+latest.projection[14]/1000.0;
+  const std::array<double,4> clip{x,0,depth,1};
+  std::array<double,4> previous_clip{};
+  for(int r=0;r<4;++r)for(int k=0;k<4;++k)
+   previous_clip[r]+=c.native_reprojection[r*4+k]*clip[k];
+  const double pixels=(previous_clip[0]/previous_clip[3]-x)*320.0;
+  assert(std::abs(pixels-0.9884632896)<1e-5);
+  c.EndFrame();c.BeginFrame();publish_world(102,3);c.PrepareIssNativeCamera();
+  assert(ready(c));
+  for(int i=0;i<16;++i)assert(std::abs(c.native_reprojection[i]-float(i%5==0))<1e-5);
+  c.EndFrame();c.BeginFrame();publish_world(103,3);latest.view_transform[0]=NAN;
+  c.PrepareIssNativeCamera();assert(!ready(c)&&!c.native_previous_valid);
+ }else if(!std::strcmp(argv[1],"scene_owner")){
+  CameraMotion c,old;IssSceneCamera::Bank bank;
+  std::array<float,53> instance{};
+  instance[0]=instance[4]=instance[8]=1;
+  for(int frame=0;frame<180;++frame){
+   publish_world(100+8*frame,0);const auto main=latest;
+   bank.Publish(main);auto last=main;
+   if(frame&&frame%45==0){
+    auto auxiliary=main;auxiliary.sequence++;auxiliary.guest_object=0x200;
+    auxiliary.composite[0]*=2;auxiliary.inverse[0]/=2;
+    auxiliary.projection[0]*=2;auxiliary.view_transform[0]*=2;
+    bank.Publish(auxiliary);last=auxiliary;
+   }
+   const auto submitted=bank.Read();c.SetIssSubmissionCameraSet(submitted);
+   std::memcpy(instance.data()+9,main.composite,12*sizeof(float));
+   c.ObserveGBufferBinding(0x40b18d54,0,212,instance.data());
+   assert(c.native_scene_camera_selected&&c.native_submission_camera.guest_object==0x100);
+   c.PrepareSubmitted();assert(ready(c)==bool(frame));
+   old.SetIssSubmissionCamera(last);old.PrepareSubmitted();
+   c.EndFrame();c.BeginFrame();old.EndFrame();old.BeginFrame();
+  }
+  assert(c.native_reject_switch==0&&old.native_reject_switch==6);
+  // A genuine scene-camera cut still clears history, then establishes a pair.
+  for(int i=0;i<2;++i){
+   publish_world(2000+i*8,2);latest.guest_object=0x300;
+   latest.composite[0]*=1.1f;latest.inverse[0]/=1.1f;
+   latest.projection[0]*=1.1f;latest.view_transform[0]*=1.1f;
+   bank.Publish(latest);c.SetIssSubmissionCameraSet(bank.Read());
+   std::memcpy(instance.data()+9,latest.composite,12*sizeof(float));
+   c.ObserveGBufferBinding(0x40b18d54,0,212,instance.data());
+   assert(c.native_scene_camera_selected);c.PrepareSubmitted();
+   assert(ready(c)==bool(i));c.EndFrame();c.BeginFrame();
+  }
+  assert(c.native_reject_switch==1);
+  // Reject unrelated bindings before mapping/copying their source memory.
+  c.SetIssSubmissionCameraSet(bank.Read());
+  assert(c.NeedGBufferSamples(0x40b18d54,0,212));
+  if(!IssFsrDiagnostics::Enabled()){
+   assert(!c.NeedGBufferSamples(0x123,0,212));
+   assert(!c.NeedGBufferSamples(0x40b18d54,1,212));
+   assert(!c.NeedGBufferSamples(0x40b18d54,0,864));
+  }
+  // An unmatched frame must never fall back to the latest CPU camera.
+  c.SetIssSubmissionCameraSet(bank.Read());c.PrepareSubmitted();
+  assert(!ready(c)&&c.native_reject_missing==1);
  }else return 2;
 }
 '''
@@ -133,12 +221,14 @@ int main(int argc,char**argv){
         # preparation. A second selection cannot change an already latched pair.
         harness=harness.replace('c.PrepareIssNativeCamera();',
             'c.SetIssSubmissionCamera(latest);c.PrepareIssNativeCamera();')
-        harness=harness.replace('FIELDS',fields).replace('INVALIDATE',invalidate).replace('SETTER',setter).replace('CLEANUP',cleanup).replace('METHOD',method)
+        harness=harness.replace('FIELDS',fields).replace('INVALIDATE',invalidate).replace('SETTER',setter).replace('CLEANUP',cleanup).replace('METHOD',method).replace('OBSERVE',observe).replace('NEED',need)
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.cpp').write_text(harness)
             subprocess.run(['c++','-std=c++20','-DISS_ANDROID_BIONIC','-Wall','-Wextra','-Werror','-I'+str(ROOT/'port'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
-            for case in ('repeat','double','validation','pause','gates','queued'):
+            for case in ('repeat','double','validation','pause','gates','queued','world_translation','scene_owner'):
                 with self.subTest(case=case):
-                    subprocess.run([str(p/'test'),case],check=True)
+                    for diagnostics in ('0','1'):
+                        subprocess.run([str(p/'test'),case],check=True,
+                            env=dict(os.environ,ISS_FSR3_DIAGNOSTICS=diagnostics))
 
 if __name__=='__main__':unittest.main()

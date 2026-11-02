@@ -14,8 +14,8 @@ export FEX_APP_CONFIG_LOCATION="$HOME/.fex-emu/" FEX_APP_DATA_LOCATION="$HOME/.f
 export FEX_APP_CACHE_LOCATION="$HOME/.cache/fex-emu"
 export TLG_DATA_DIR="$base" TLG_GAME_DIR="${ISS_GAME_DIR:?Choose the extracted inFAMOUS game folder}"
 export ISS_BIONIC=1 ISS_ANDROID_INPUT=1 TLG_ANDROID_INPUT=1
-# Compare phase-level host waits without restoring expensive per-packet diagnostics.
-export ISS_COMPARE_STATS="${ISS_COMPARE_STATS:-1}"
+# Developer profiling is opt-in; gameplay avoids its clocks and fault counters.
+export ISS_COMPARE_STATS="${ISS_COMPARE_STATS:-0}"
 # Readback outcomes distinguish successful deferred copies from stale-copy fallbacks.
 export TLG_READBACK_STATS="${TLG_READBACK_STATS:-$ISS_COMPARE_STATS}"
 export TLG_FAULT_PROFILE="${TLG_FAULT_PROFILE:-$ISS_COMPARE_STATS}"
@@ -25,6 +25,9 @@ case "${TLG_UPSCALER:-none}" in
  fsr3) export TLG_UPSCALER=fsr3 ISS_UPSCALER=fsr3 TLG_OBJECT_MOTION=1 ISS_OBJECT_MOTION=1 TLG_JITTER=1 ISS_JITTER=1 ;;
  *) export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 ISS_OBJECT_MOTION=0 TLG_JITTER=0 ISS_JITTER=0 ;;
 esac
+# Capture is disabled in the performance build, including stale trigger files.
+export ISS_FSR3_CAPTURE=0 ISS_FSR3_DIAGNOSTICS=0
+unset TLG_DUMP_TRIGGER TLG_DUMP_DIR TLG_DUMP_FRAMES TLG_PRESENT_DUMP_TRIGGER TLG_PRESENT_DUMP_COUNT
 export TLG_FSR1=0 TLG_RCAS=0
 export TLG_PAD_FILE="$base/android-pad.state"
 export TLG_CONFIG="$base/user/tlg.ini" ISS_CONFIG="$base/user/tlg.ini"

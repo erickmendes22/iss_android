@@ -242,7 +242,7 @@ private:
     CmdBuffer CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb);
     Task ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb, u64 seq = NoSeq
 #ifdef ISS_ANDROID_BIONIC
-                         , std::optional<TlgIssCameraSnapshot> iss_camera = std::nullopt
+                         , std::optional<TlgIssCameraSet> iss_camera = std::nullopt
 #endif
     );
     Task ProcessCeUpdate(std::span<const u32> ccb);

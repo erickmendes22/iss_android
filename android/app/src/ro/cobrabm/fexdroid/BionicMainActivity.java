@@ -14,7 +14,7 @@ public final class BionicMainActivity extends Activity {
 
  private TextView status; private boolean busy;
  private final java.util.ArrayList<Button> actions=new java.util.ArrayList<>();
- private static final int IMPORT_SAVE=10, EXPORT_SAVE=11, EXPORT_FSR=12;
+ private static final int IMPORT_SAVE=10, EXPORT_SAVE=11;
  private BionicPkgInstaller pkg;
  private ProgressBar progress;
  private Dialog setupDialog;
@@ -66,7 +66,7 @@ public final class BionicMainActivity extends Activity {
    LinearLayout driver=card(content,AppLanguage.text("Vulkan driver","Driver Vulkan"));BionicDriverSettings.add(this,driver);
    LinearLayout display=card(content,AppLanguage.text("HUD AND CONTROLS", "HUD E CONTROLES"));File hud=new File(getFilesDir(),"issport/hud.ini");hud.getParentFile().mkdirs();HudConfig.migrateLegacy(this,hud);button(display,"HUD — FPS / GPU / CPU",()->HudControls.show(this,hud,null));button(display,AppLanguage.text("Controls and D-pad swipes", "Controles e swipe pelo D-pad"),()->BionicPlayerMenu.controlSettings(this,null,null));
    LinearLayout saves=card(content,AppLanguage.text("Saves","Salvamentos"));saves.addView(label(AppLanguage.text("Import or export saves with the game closed.", "Importe ou exporte seus salvamentos com o jogo fechado."),14,0xffc7aba8));button(saves,AppLanguage.text("Export saves (ZIP)", "Exportar salvamentos (ZIP)"),()->chooseSave(false));button(saves,AppLanguage.text("Import saves (ZIP)", "Importar salvamentos (ZIP)"),()->chooseSave(true));
-   LinearLayout logs=card(content,AppLanguage.text("LOGS","REGISTROS"));button(logs,AppLanguage.text("Export latest log", "Exportar último log"),()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));button(logs,AppLanguage.text("Export FSR3 image capture (ZIP)", "Exportar captura FSR3 (ZIP)"),this::chooseFsrExport);
+   LinearLayout logs=card(content,AppLanguage.text("LOGS","REGISTROS"));button(logs,AppLanguage.text("Export latest log", "Exportar último log"),()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
    LinearLayout fg=card(content,"LOSSLESS.DLL · BLOODFRAME");button(fg,AppLanguage.text("Import Lossless.dll", "Importar Lossless.dll"),()->FramegenSettings.chooseDll(this));
   }else{
    LinearLayout about=card(content,"inFAMOUS SECOND SON — DAEDALUS FORK");about.addView(label(AppLanguage.text("Version","Versão")+" 0.2\n"+AppLanguage.text("Android port with a Bionic runtime.","Port para Android com runtime Bionic.")+"\n\n"+AppLanguage.text("Fork and modifications:","Fork e modificações:")+" erickmendes22\nDaedalus Emulator\n\n"+AppLanguage.text("Base project:","Projeto base:")+" HayatoG/iss_pc\n\n"+AppLanguage.text("No game files are included.","Nenhum arquivo do jogo está incluído."),17,0xfffff1e9));button(about,"YouTube · @daedalusemulator",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/@daedalusemulator"))));button(about,"GitHub · iss_android",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/erickmendes22/iss_android"))));
@@ -117,67 +117,6 @@ public final class BionicMainActivity extends Activity {
   String path=getSharedPreferences("iss",0).getString("game_dir","");if(!new File(path,"eboot.bin").canRead()||!new File(path,"art").isDirectory()||!new File(path,"art").canRead()){status.setText(AppLanguage.text("Choose the inFAMOUS game folder containing eboot.bin and readable art/.","Escolha a pasta de inFAMOUS com eboot.bin e art/ acessível."));return;}
   setBusy(true);status.setText(AppLanguage.text("Preparing runtime…", "Preparando runtime…"));new Thread(()->{try{BionicRuntimeInstaller.install(this);runOnUiThread(()->{setBusy(false);refresh();startActivity(new Intent(this,BionicGameActivity.class).putExtra("game_dir",path));});}catch(Exception e){runOnUiThread(()->{setBusy(false);status.setText(e.toString());});}},"runtime-install").start();}
  private void setBusy(boolean value){busy=value;if(progress!=null)progress.setVisibility(value?android.view.View.VISIBLE:android.view.View.GONE);for(Button b:actions)b.setEnabled(!value);}
- private void chooseFsrExport(){
-  File capture=new File(getFilesDir(),"issport/fsr-capture");
-  File[] files=FsrCaptureFiles.select(capture);
-  if(!FsrCaptureFiles.complete(files)){
-   status.setText(AppLanguage.text("No complete FSR3 capture yet. Use Capture FSR3 in the in-game menu and play a few seconds.",
-                                   "Ainda não há captura FSR3 completa. Use Capturar FSR3 no menu do jogo e jogue alguns segundos."));
-   return;
-  }
-  Intent picker=new Intent(Intent.ACTION_CREATE_DOCUMENT);
-  picker.addCategory(Intent.CATEGORY_OPENABLE);
-  picker.setType("application/zip");
-  picker.putExtra(Intent.EXTRA_TITLE,"inFAMOUS-FSR3-Input-Motion-Output.zip");
-  try{startActivityForResult(picker,EXPORT_FSR);}catch(Exception e){status.setText(e.getMessage());}
- }
- private void exportFsrCapture(Uri uri){
-  setBusy(true);
-  status.setText(AppLanguage.text("Exporting FSR3 frame data…","Exportando quadros FSR3…"));
-  new Thread(()->{
-   String message;
-   try(OutputStream output=getContentResolver().openOutputStream(uri,"wt")){
-    if(output==null)throw new IOException("No writable destination.");
-    File dir=new File(getFilesDir(),"issport/fsr-capture");
-    File[] files=FsrCaptureFiles.select(dir);
-    if(!FsrCaptureFiles.complete(files))throw new IOException("FSR capture not yet complete.");
-    java.util.Arrays.sort(files,(a,b)->a.getName().compareTo(b.getName()));
-    try(java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(output)){
-     zip.putNextEntry(new java.util.zip.ZipEntry("capture-info.txt"));
-     zip.write(("FSR3 inFAMOUS input and output buffers.\n"+
-                "input/output: tightly packed RGBA8 UNORM, width x height in filename.\n"+
-                "aa_before_fxaa: original AA-pass input; format suffix preserves original GPU pixel encoding.\n"+
-                "aa_after_fxaa: game AA/composite output, before FSR.\n"+
-                "aa_info: selected FSR input, original Vulkan format and extent; missing pre-FXAA is explicitly reported.\n"+
-                "fsr_history_previous / fsr_before_rcas: exact SDK previous/current color history, RGBA16F.\n"+
-                "fsr_accumulation: R8 history weight. fsr_reactivity: RGBA8 (reactive, disocclusion, shading change, accumulation).\n"+
-                "fsr_info: effective SDK frame index, reset, jitter and scales.\n"+
-                "motion: RG16 float pixels (previous-current).\n"+
-                "object_motion: raw RGBA32F before composition; RG=previous-current pixels, B=history valid, A=written depth. aa_info declares availability.\n"+
-                "depth: float32 depth, reversed-Z.\n"+
-                "f000/f001 = successive frames; output includes SDK sharpening.\n").getBytes("UTF-8"));
-     zip.closeEntry();
-     byte[] buf=new byte[65536];
-     int count=0;
-     for(File file:files){
-      if(!file.isFile()||file.length()<=0||file.length()>20000000L)continue;
-      zip.putNextEntry(new java.util.zip.ZipEntry(file.getName()));
-      try(InputStream input=new FileInputStream(file)){int n;while((n=input.read(buf))!=-1)zip.write(buf,0,n);}
-      zip.closeEntry();count++;
-     }
-     File log=new File(getFilesDir(),"iss.log");
-     if(log.isFile()&&log.length()<5000000L){
-      zip.putNextEntry(new java.util.zip.ZipEntry("iss-android.log"));
-      try(InputStream input=new FileInputStream(log)){int n;while((n=input.read(buf))!=-1)zip.write(buf,0,n);}
-      zip.closeEntry();
-     }
-     if(count<4)throw new IOException("Insufficient captured frame buffers.");
-    }
-    message=AppLanguage.text("FSR3 image capture ZIP exported.","ZIP da captura FSR3 exportado.");
-   }catch(Exception e){message=AppLanguage.text("FSR3 capture export failed: ","Falha ao exportar captura FSR3: ")+e.getMessage();}
-   final String result=message;runOnUiThread(()->{setBusy(false);status.setText(result);});
-  },"iss-fsr-capture-export").start();
- }
  private File saves(){return new File(getFilesDir(),"issport/user/savedata");}
  private void chooseSave(boolean importing){
   if(busy)return;
@@ -216,10 +155,6 @@ public final class BionicMainActivity extends Activity {
   if(BionicDriverSettings.result(this,req,result,data))return;
   if(req==FramegenSettings.IMPORT_DLL){if(result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);return;}
   if(pkg!=null&&pkg.result(req,result,data))return;
-  if(req==EXPORT_FSR){
-   if(result==RESULT_OK&&data!=null&&data.getData()!=null)exportFsrCapture(data.getData());
-   return;
-  }
   if(req==IMPORT_SAVE||req==EXPORT_SAVE){
    if(result==RESULT_OK&&data!=null&&data.getData()!=null)transferSave(data.getData(),req==IMPORT_SAVE);
    else {setBusy(false);refresh();}return;

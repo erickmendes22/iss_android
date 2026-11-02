@@ -275,6 +275,29 @@ private:
     bool worker_caches_seeded = false;
     struct DriverCacheSaver;
     DriverCacheSaver* driver_saver = nullptr; ///< tlg: BP08
+    // Bionic Fast Draw: unlike desktop, the default has zero preparation workers.
+    // A successful graphics pipeline can be reused directly while the PM4 register
+    // checksum, frame, submission tick and every shader's flattened guest user data
+    // remain identical. No descriptors, textures, hazards or render state are skipped.
+    struct FastGraphicsStage {
+        const Shader::Info* info{};
+        Shader::HwStage hw_stage{};
+        u64 program_hash{}, program_base{};
+        std::vector<u32> flat{};
+    };
+    struct FastGraphicsState {
+        const GraphicsPipeline* pipeline{};
+        u64 checksum{}, tick{}, frame{};
+        std::size_t key_hash{};
+        bool valid = false;
+        std::array<FastGraphicsStage, MaxShaderStages> stages{};
+    } fast_graphics;
+    const GraphicsPipeline* TryFastGraphicsPipeline(const DrawIndirectParams params,
+                                                    const PreparedDraw* prepared);
+    const GraphicsPipeline* RememberFastGraphicsPipeline(const GraphicsPipeline* pipeline,
+                                                         const DrawIndirectParams params,
+                                                         const PreparedDraw* prepared);
+
     /// tlg: TLG_PARALLEL_WARMUP: WarmUp builds the cached pipelines on these threads.
     struct WarmupPool;
     WarmupPool* warmup_pool = nullptr;

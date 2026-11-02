@@ -265,7 +265,7 @@ private:
         // Only pages actually copied from the GPU can become stale. The 512 KiB
         // prefetch window is a scheduling envelope, not a set of copied bytes.
         bool CopiesTouchPages(VAddr addr, VAddr end) const noexcept {
-            return ReadbackCopyPagesOverlap(arena_base, copies, addr, end);
+            return OrderedReadbackCopyPagesOverlap(arena_base, copies, addr, end);
         }
         bool Done() const noexcept {
             return applied.load(std::memory_order_acquire) ||

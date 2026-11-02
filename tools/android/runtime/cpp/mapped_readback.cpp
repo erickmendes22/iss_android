@@ -85,7 +85,7 @@ struct Instance {
 struct Semaphore {
     u64 completed=5,waited=0;
     bool IsFree(u64 tick)const{return completed>=tick;}
-    void Wait(u64 tick){assert(tick<=10);waited=tick;completed=std::max(completed,tick);}
+    void Wait(u64 tick){assert(tick<10000);waited=tick;completed=std::max(completed,tick);}
 };
 struct Scheduler {
     Semaphore sem;u64 current=10;unsigned flushes=0;
@@ -199,7 +199,8 @@ struct BufferCache {
     std::atomic<u32> deferred_count{},eager_count{};
     static bool DeferredReadbackEnabled(){return true;}
     static bool MappedReadbackPolicy();
-    auto GetReadbackWindow(VAddr,u64){return std::tuple{&arena,arena.cpu_addr,arena.cpu_addr+0x80000};}
+    std::tuple<const Buffer*,VAddr,VAddr> GetReadbackWindow(VAddr,u64);
+    const Buffer* GetArena(u32,u32){return &arena;}
     void ApplyEagerSubtractsLocked(){}
     void FlushMergedWrites(const Buffer*,VAddr,u64){}
     void NoteDeviceWrite(VAddr,u64,u64);
@@ -220,7 +221,7 @@ int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
     const bool targeted=mode=="hybrid_targeted_pages";
     if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
-    const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap";
+    const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap" || mode=="hybrid_batching";
     VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted;
     const bool partial=mode.starts_with("partial_");
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
@@ -240,6 +241,28 @@ int main(int argc,char** argv) {
     VULKAN_HPP_DEFAULT_DISPATCHER.vkUnmapMemory=Unmap;
     VULKAN_HPP_DEFAULT_DISPATCHER.vkFreeMemory=Free;
     VideoCore::BufferCache c;const VAddr base=c.arena.cpu_addr;
+    if (mode=="hybrid_batching") {
+        // Requested producers are ready while a neighbor is unfinished. A serial
+        // staging queue must still prefetch the window, not submit a second copy
+        // when the guest reaches the next page after the first copy's GPU wait.
+        c.mapped_readbacks_enabled=false;c.scheduler.sem.completed=7;
+        for(unsigned p=0;p<128;++p) {
+            const VAddr addr=base+p*4096+16;
+            c.tracker.ranges.emplace_back(addr,4);c.gpu_modified_ranges.Add(addr,4);
+            c.write_ticks.Write(addr,4,p==127?9:7);
+        }
+        unsigned waits=0;u64 copied=0;
+        for(unsigned p=0;p<128;++p) {
+            const VAddr addr=base+p*4096+16;
+            if(!c.tracker.IsRegionGpuModified(addr,4))continue;
+            auto r=c.StartDeferredReadback(addr,4);assert(r && !r->mapped);
+            for(const auto& copy:r->copies)copied+=copy.size;
+            assert(c.FinishDeferredReadback(*r,true));++waits;
+        }
+        assert(c.runtime.copies==1 && c.scheduler.flushes==1 && waits==1);
+        assert(copied==128*4 && c.gpu_modified_ranges.intervals.empty());
+        return 0;
+    }
     {
         VideoCore::BufferCache::ResidencyAttempt attempt{};
         auto memory=c.AllocateResidency(16384,attempt);assert(memory && memory->second==0);

@@ -48,12 +48,6 @@ final class BionicPlayerMenu {
   row("◉",AppLanguage.text("Frame generation (BloodFrame)", "Geração de quadros (BloodFrame)"),m>=2?m+"×":AppLanguage.text("Off", "Desligado"),()->FramegenSettings.show(activity,()->{apply();contents();}));
   HudConfig config=HudConfig.load(hudFile);row("☷","HUD — FPS / GPU / CPU",config.enabled?AppLanguage.text("On", "Ligado"):AppLanguage.text("Off", "Desligado"),()->HudControls.show(activity,hudFile,()->{apply();contents();}));
   row("◈",AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes"),BionicReadbackSettings.summary(activity),()->BionicReadbackSettings.show(activity,this::contents));
-  if(activity.getSharedPreferences("iss",0).getBoolean("fsr3",false)){
-   row("▧",AppLanguage.text("Capture FSR3 image (2 frames)", "Capturar imagem FSR3 (2 quadros)"),
-       AppLanguage.text("Input, depth, motion and output — export ZIP in Settings",
-                        "Entrada, profundidade, movimento e saída — exporte ZIP nas Config."),
-       this::captureFsr3);
-  }
   section(AppLanguage.text("CONTROLS", "CONTROLES"));boolean visible=activity.getSharedPreferences("iss",0).getBoolean("controller_overlay",true);
   row("✚",AppLanguage.text("On-screen controller", "Controle na tela"),visible?AppLanguage.text("On", "Ligado"):AppLanguage.text("Off", "Desligado"),()->{activity.getSharedPreferences("iss",0).edit().putBoolean("controller_overlay",!visible).apply();apply();contents();});
   Switch labels=new Switch(activity);labels.setText(AppLanguage.text("Button labels", "Legendas dos botões"));labels.setTextColor(0xfffff1e9);labels.setChecked(activity.getSharedPreferences("iss",0).getBoolean("controller_labels",true));items.addView(labels);
@@ -67,31 +61,6 @@ final class BionicPlayerMenu {
   row("✎",AppLanguage.text("Edit controller layout", "Editar layout do controle"),AppLanguage.text("Drag to move · two fingers to resize", "Arraste para mover · use dois dedos para redimensionar"),()->{close();activity.getSharedPreferences("iss",0).edit().putBoolean("controller_overlay",true).apply();apply();controls.edit(null);});
   row("↺",AppLanguage.text("Reset controller layout", "Restaurar layout do controle"),null,()->{controls.resetLayout();close();});
   row("⇥",AppLanguage.text("Exit game", "Sair do jogo"),null,()->new AlertDialog.Builder(activity).setTitle(AppLanguage.text("Exit inFAMOUS?", "Sair de inFAMOUS?")).setMessage(AppLanguage.text("Unsaved progress will be lost.", "O progresso não salvo será perdido.")).setNegativeButton(AppLanguage.text("Cancel", "Cancelar"),null).setPositiveButton(AppLanguage.text("Exit", "Sair"),(d,w)->activity.finishAffinity()).show());
- }
- private void captureFsr3(){
-  File base=new File(activity.getFilesDir(),"issport");
-  File directory=new File(base,"fsr-capture");
-  if(!directory.isDirectory()&&!directory.mkdirs()){
-   Toast.makeText(activity,AppLanguage.text("Cannot create capture folder.","Falha ao criar pasta da captura."),Toast.LENGTH_LONG).show();
-   return;
-  }
-  // Clear only prior captures, never user saves or unrelated diagnostic files.
-  File[] old=directory.listFiles();
-  if(old!=null)for(File file:old){
-   if(file.isFile()&&FsrCaptureFiles.captureName(file.getName()))
-    file.delete();
-  }
-  File trigger=new File(base,"fsr-capture.trigger");
-  try(FileOutputStream stream=new FileOutputStream(trigger,false)){
-   stream.write('1');
-  }catch(IOException error){
-   Toast.makeText(activity,AppLanguage.text("FSR capture request failed: ","Falha ao pedir captura FSR: ")+error.getMessage(),Toast.LENGTH_LONG).show();
-   return;
-  }
-  close();
-  Toast.makeText(activity,AppLanguage.text("FSR capture requested; play normally, then export ZIP in Settings.",
-                                           "Captura FSR solicitada; jogue normalmente e exporte o ZIP nas Config."),
-                 Toast.LENGTH_LONG).show();
  }
  static void controlSettings(Activity a,PadBridge pad,Runnable updated){
   android.content.SharedPreferences p=a.getSharedPreferences("iss",0);LinearLayout l=new LinearLayout(a);l.setOrientation(1);l.setPadding(24,12,24,12);

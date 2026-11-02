@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_capture_host_read.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -59,6 +60,9 @@ FfxVkPortableImage Describe(vk::Image image, vk::Format format, u32 width, u32 h
 /// <dir>/fNNN_<name>_<w>x<h>_<format>.raw, for checking temporal stability offline.
 /// Returns the frame number to dump, or -1.
 int DumpFrame() {
+#ifdef ISS_ANDROID_BIONIC
+    if (!IssFsrDiagnostics::CaptureEnabled()) return -1;
+#endif
     static const char* trigger = std::getenv("TLG_DUMP_TRIGGER");
     static int remaining = 0, index = 0, polls = 0;
     if (!trigger) {
@@ -114,6 +118,7 @@ struct DumpImage {
     const char* name;
     const char* format;
     vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor;
+    u32 offset_x = 0, offset_y = 0;
 };
 
 /// Copies `images` into host buffers after the commands recorded so far and writes them to
@@ -153,9 +158,11 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
         }
         const vk::BufferImageCopy region{
             .imageSubresource = {image.aspect, 0, 0, 1},
+            .imageOffset = {int(image.offset_x), int(image.offset_y), 0},
             .imageExtent = {image.width, image.height, 1},
         };
         cmdbuf.copyImageToBuffer(image.image, vk::ImageLayout::eGeneral, buffer, region);
+        CaptureHostReadBarrier(cmdbuf, vk::Buffer(buffer), size);
         char path[512];
         std::snprintf(path, sizeof(path), "%s/f%03d_%s_%ux%u_%s.raw", dir.c_str(), frame,
                       image.name, image.width, image.height, image.format);
@@ -347,9 +354,32 @@ bool TemporalUpscaler::ReactiveOn() const {
            TlgSettings::Get().upscaler != TlgSettings::UpscalerTaa;
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void TemporalUpscaler::ObserveIssSceneDepth(VideoCore::ImageId depth) {
+    if (!depth || !scaled_session || !Active() ||
+        TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3) return;
+    const auto& info = texture_cache.GetImage(depth).info;
+    if (RenderTarget(info.size.width, info.size.height)) {
+        iss_scene_jitter.Observe({info.guest_address, info.size.width,
+                                 info.size.height, u64(info.pixel_format)});
+    }
+}
+
+std::array<float, 2> TemporalUpscaler::IssGeometryJitter(VideoCore::ImageId depth) const {
+    if (!depth || !Active()) return {};
+    if (!scaled_session || TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3) {
+        return depth == camera_motion.Depth() ? Jitter() : std::array<float, 2>{};
+    }
+    const auto& info = texture_cache.GetImage(depth).info;
+    return iss_scene_jitter.Applies({info.guest_address, info.size.width,
+                                    info.size.height, u64(info.pixel_format)})
+               ? Jitter() : std::array<float, 2>{};
+}
+#endif
+
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.scene_colors;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.scene_colors;
     // At the first HDR lighting pass the geometry depth is still valid.
     // Subsequent passes reuse that same guest D32S8 image for HUD primitives,
     // destroying the per-pixel scene depth before RunScaled() normally reads it.
@@ -450,7 +480,7 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     const auto& settings = TlgSettings::Get();
 #ifdef ISS_ANDROID_BIONIC
-    if (Active() && ++android_fsr_probe.frames >= 180) {
+    if (IssFsrDiagnostics::Enabled() && Active() && ++android_fsr_probe.frames >= 180) {
         const auto& d = android_fsr_probe;
         std::printf("FSR3 probe: frames=%u scene_color=%u ldr_target=%u draws=%u "
                     "native_viewport=%u ui_candidates=%u camera_ready=%u ldr_match=%u "
@@ -481,7 +511,7 @@ bool TemporalUpscaler::OnFrameStart() {
                     d.native_camera_dispatches, d.fallback_motion_dispatches);
         android_fsr_probe = {};
     }
-    if (!android_ui_samples_printed && android_ui_sample_count &&
+    if (IssFsrDiagnostics::Enabled() && !android_ui_samples_printed && android_ui_sample_count &&
         android_fsr_probe.frames == 0) {
         std::printf("FSR3 ISS fullscreen passes: %u distinct candidates\n",
                     android_ui_sample_count);
@@ -565,6 +595,7 @@ bool TemporalUpscaler::OnFrameStart() {
     done_this_frame = false;
 #ifdef ISS_ANDROID_BIONIC
     iss_scene_depth_snapshot_valid = false;
+    iss_scene_jitter.BeginFrame(changed || !active);
 #endif
     ldr_target = {};
 #ifdef ISS_ANDROID_BIONIC
@@ -1246,7 +1277,7 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
                          sizeof(extra), &extra);
     cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.extra_sharpen_dispatches;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.extra_sharpen_dispatches;
 #endif
     image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                   vk::AccessFlagBits2::eShaderStorageWrite, all, rw);
@@ -1747,7 +1778,7 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.ldr_targets;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ldr_targets;
 #endif
         ldr_target = color;
     }
@@ -1756,10 +1787,12 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.ui_draws;
-    if (native_viewport) ++android_fsr_probe.native_viewport_draws;
-    if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
-    if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+    if (IssFsrDiagnostics::Enabled()) {
+        ++android_fsr_probe.ui_draws;
+        if (native_viewport) ++android_fsr_probe.native_viewport_draws;
+        if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
+        if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+    }
 #endif
     if (!Scaled() && vs_hash == ui_trigger_vs) done_this_frame = true;
     if (!Scaled() || !color) {
@@ -1767,7 +1800,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     }
     if (ui_phase) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.ui_draws_after_fsr;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ui_draws_after_fsr;
 #endif
         // A UI movie can start without stencil and enable it for later text/masks.
         if (color == ui_color && depth && depth != ui_depth) {
@@ -1783,7 +1816,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     // The original Bloodborne probe required a known LDR target here.
     // ISS draws its fullscreen passes before that target is identified,
     // so sample the actual vertex hashes irrespective of LDR availability.
-    if (android_fsr_probe.scene_colors > 0 &&
+    if (IssFsrDiagnostics::Enabled() && android_fsr_probe.scene_colors > 0 &&
         (native_viewport || (ldr_target && ldr_target == color)) &&
         !android_ui_samples_printed &&
         android_ui_sample_count < android_ui_samples.size()) {
@@ -1814,7 +1847,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         RenderTarget(image.info.size.width, image.info.size.height) &&
         !FrameCapture::IsDisplayBuffer(image.info.guest_address);
 #ifdef ISS_ANDROID_BIONIC
-    if (ui_draw) ++android_fsr_probe.rgba_ui_candidates;
+    if (IssFsrDiagnostics::Enabled() && ui_draw) ++android_fsr_probe.rgba_ui_candidates;
 #endif
     switch (UiComposition::Choose(Scaled(), ui_draw,
                                   camera_motion.Ready() && ldr_target == color,
@@ -2043,7 +2076,7 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
 
 void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId depth_id) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.ui_only_copies;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.ui_only_copies;
 #endif
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->Mark(0xF5A1'0000ull, [] { return std::string{"upscaler RunUiOnly"}; });
@@ -2193,6 +2226,13 @@ void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height, 
 }
 
 void TemporalUpscaler::RunScaled() {
+#ifdef ISS_ANDROID_BIONIC
+    iss_capture_sample = {};
+    // Report what was actually rasterized, including the zero-jitter discovery
+    // frame. Never tell FSR to undo a Halton shift absent from its input.
+    const auto jitter = IssGeometryJitter(camera_motion.Depth());
+    camera_motion.SetEffectiveJitter(jitter);
+#endif
     if (auto* profiler = GpuProfiler::Get()) {
         const char* label = TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa
             ? "upscaler RunScaled (TAA)" : "upscaler RunScaled (FSR)";
@@ -2209,12 +2249,14 @@ void TemporalUpscaler::RunScaled() {
         return;
     }
 #ifdef ISS_ANDROID_BIONIC
-    android_fsr_probe.source_width = iw;
-    android_fsr_probe.source_height = ih;
-    android_fsr_probe.depth_width = depth.info.size.width;
-    android_fsr_probe.depth_height = depth.info.size.height;
-    android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
-    android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+    if (IssFsrDiagnostics::Enabled()) {
+        android_fsr_probe.source_width = iw;
+        android_fsr_probe.source_height = ih;
+        android_fsr_probe.depth_width = depth.info.size.width;
+        android_fsr_probe.depth_height = depth.info.size.height;
+        android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
+        android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+    }
 #endif
 #ifdef ISS_ANDROID_BIONIC
     // Some scenes complete from UiComposition::Background::Temporal rather
@@ -2604,9 +2646,9 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.dispatched;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.dispatched;
         static bool native_jitter_reported = false;
-        if (!native_jitter_reported && camera_motion.IssNativeCameraReady()) {
+        if (IssFsrDiagnostics::Enabled() && !native_jitter_reported && camera_motion.IssNativeCameraReady()) {
             native_jitter_reported = true;
             std::printf("FSR3 ISS jitter aligned: native=%.3f,%.3f viewport=%.3f,%.3f "
                         "sdk=%.3f,%.3f (render pixels)\n",
@@ -2618,12 +2660,12 @@ void TemporalUpscaler::RunScaled() {
         // not OnFrameStart, where the previous frame's camera is invalidated.
         // This is a per-scene result and makes the 180-frame summary truthful.
         if (camera_motion.IssNativeCameraReady()) {
-            ++android_fsr_probe.native_camera_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.native_camera_dispatches;
         } else {
-            ++android_fsr_probe.fallback_motion_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.fallback_motion_dispatches;
         }
         if (settings.sharpen.load() && settings.sharpness.load() > 0.0f)
-            ++android_fsr_probe.rcas_dispatches;
+            if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.rcas_dispatches;
 #endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
 #ifdef ISS_ANDROID_BIONIC
@@ -2631,7 +2673,9 @@ void TemporalUpscaler::RunScaled() {
         // Capture a *user-requested*, bounded pair of frames, including exactly
         // the images consumed by the SDK, so loss of detail can be located
         // before vs. during temporal reconstruction. No GPU readback otherwise.
-        if (const int dump = DumpFrame(); dump >= 0) {
+        const int dump = DumpFrame();
+        if (dump == 0) iss_temporal_capture.Begin();
+        if (dump >= 0) {
             // RecordMotion already called ObjectMotion::PrepareRead: this image
             // is General. Keep RG/valid/depth unchanged to distinguish missing
             // facial history from a vector rejected by the depth/outlier guard.
@@ -2675,6 +2719,29 @@ void TemporalUpscaler::RunScaled() {
                            {{pre.GetImage(), w, h, encoding.bytes, "aa_before_fxaa", encoding.name}});
             }
         }
+        iss_capture_sample = iss_temporal_capture.Advance();
+        if (iss_capture_sample.index >= 0) {
+            const auto crop = IssTemporalCapture::Center(ow, oh);
+            DumpImages(instance, scheduler, cmdbuf, iss_capture_sample.index,
+                       {{vk::Image(ui_image), crop.width, crop.height, 4, "trace_output", "rgba",
+                         vk::ImageAspectFlagBits::eColor, crop.x, crop.y}});
+            const char* dir = std::getenv("TLG_DUMP_DIR");
+            char path[512];
+            std::snprintf(path, sizeof(path), "%s/f%03d_trace_info.txt",
+                          dir && *dir ? dir : "out/dump", iss_capture_sample.index);
+            if (FILE* f = std::fopen(path, "wb")) {
+                const auto now = std::chrono::steady_clock::now().time_since_epoch();
+                std::fprintf(f, "trace_frames=%d\ntrace_ahb_expected=1\nserial=%llu\nsteady_ns=%lld\ndispatch_frame_id=%llu\n"
+                                "dispatch_reset=%u\njitter=%.9g,%.9g\nframe_time_ms=%.9g\n"
+                                "output_extent=%ux%u\ncrop=%u,%u,%u,%u\n",
+                             IssTemporalCapture::Frames, (unsigned long long)iss_capture_sample.serial,
+                             (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(),
+                             (unsigned long long)info.frameId, unsigned(info.reset),
+                             info.jitterOffset.x, info.jitterOffset.y, info.frameTimeMilliseconds,
+                             ow, oh, crop.x, crop.y, crop.width, crop.height);
+                std::fclose(f);
+            }
+        }
 #endif
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
@@ -2716,7 +2783,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                                      const VideoCore::ImageViewInfo& view_info, Target& target) {
     if (ui_phase && color == ui_color) {
 #ifdef ISS_ANDROID_BIONIC
-        ++android_fsr_probe.redirected_color;
+        if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.redirected_color;
 #endif
         target = {Mirror(vk::Image(ui_image), ui_views, view_info.format, {}),
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
@@ -2774,6 +2841,9 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
         cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
     });
     display.valid = true;
+#ifdef ISS_ANDROID_BIONIC
+    display.capture_sample = iss_capture_sample;
+#endif
     target = {Mirror(vk::Image(display.image), display.views, view_info.format, {}),
               vk::ImageLayout::eGeneral, ui_width, ui_height};
     return true;
@@ -2811,7 +2881,7 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
         });
     }
 #ifdef ISS_ANDROID_BIONIC
-    ++android_fsr_probe.redirected_samples;
+    if (IssFsrDiagnostics::Enabled()) ++android_fsr_probe.redirected_samples;
 #endif
     view = Mirror(vk::Image(ui_image), ui_views, info.format, info.mapping);
     layout = vk::ImageLayout::eGeneral;
@@ -2825,9 +2895,32 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
         return false;
     }
     display = {vk::Image(it->second.image), it->second.format, it->second.width, it->second.height};
+#ifdef ISS_ANDROID_BIONIC
+    // The token travels with this display image, not a global "latest frame".
+    // Repeated presentation of the same image must not duplicate/overwrite samples.
+    auto& captured = it->second;
+    display.capture_index = captured.capture_sample.index;
+    display.capture_serial = captured.capture_sample.serial;
+    if (captured.capture_sample.index >= 0 &&
+        captured.captured_serial != captured.capture_sample.serial) {
+        captured.captured_serial = captured.capture_sample.serial;
+        scheduler.EndRendering();
+        const auto crop = IssTemporalCapture::Center(display.width, display.height);
+        const bool bgra = display.format == vk::Format::eB8G8R8A8Unorm ||
+                          display.format == vk::Format::eB8G8R8A8Srgb;
+        DumpImages(instance, scheduler, scheduler.CommandBuffer(), captured.capture_sample.index,
+                   {{display.image, crop.width, crop.height, 4, "trace_present", bgra ? "bgra" : "rgba",
+                     vk::ImageAspectFlagBits::eColor, crop.x, crop.y}});
+    }
+#endif
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // TLG_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
-    static const char* dump = std::getenv("TLG_PRESENT_DUMP_TRIGGER");
+    static const char* dump = []() -> const char* {
+#ifdef ISS_ANDROID_BIONIC
+        if (!IssFsrDiagnostics::CaptureEnabled()) return nullptr;
+#endif
+        return std::getenv("TLG_PRESENT_DUMP_TRIGGER");
+    }();
     static const int dump_count = [] {
         const char* env = std::getenv("TLG_PRESENT_DUMP_COUNT");
         return env ? std::max(1, std::atoi(env)) : 1;

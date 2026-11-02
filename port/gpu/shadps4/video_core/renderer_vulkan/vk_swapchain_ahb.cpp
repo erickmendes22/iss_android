@@ -6,6 +6,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <algorithm>
+#include <utility>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -120,6 +121,7 @@ void Swapchain::Create(u32 width_, u32 height_) {
     zero_extent = false;
     Destroy();
     extent = vk::Extent2D{width, height};
+    capture_supported = true;
     ++generation;
     if (client.Connected()) {
         if (!client.BeginGeneration(generation, width, height, AhbFormat, image_count)) {
@@ -196,6 +198,7 @@ void Swapchain::CreateBuffer(u32 index) {
     if (format_props.formatFeatures & vk::FormatFeatureFlagBits::eSampledImage) {
         usage |= vk::ImageUsageFlagBits::eSampled;
     }
+    capture_supported = capture_supported && bool(usage & vk::ImageUsageFlagBits::eTransferSrc);
     const vk::ExternalMemoryImageCreateInfo external_info{
         .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eAndroidHardwareBufferANDROID,
     };
@@ -435,9 +438,22 @@ int Swapchain::ExportPresentReady() {
 bool Swapchain::Present() {
     const int fence_fd = ExportPresentReady();
     ++frame_counter;
+    const int trace_index = std::exchange(capture_index, -1);
+    if (trace_index >= 0) {
+        const char* dir = std::getenv("TLG_DUMP_DIR"); char path[512];
+        std::snprintf(path, sizeof(path), "%s/f%03d_presenter_info.txt", dir && *dir ? dir : "out/dump", trace_index);
+        if (FILE* f = std::fopen(path, "wb")) {
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            std::fprintf(f, "serial=%llu\nframe=%llu\ngeneration=%u\nbuffer=%u\nsteady_ns=%lld\nahb_extent=%ux%u\nahb_crop=%u,%u,%u,%u\nsource_frame_extent=%ux%u\nahb_status=%s\n",
+                (unsigned long long)capture_serial, (unsigned long long)frame_counter, generation, image_index,
+                (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(), width, height,
+                capture_crop[0], capture_crop[1], capture_crop[2], capture_crop[3], capture_frame_size[0], capture_frame_size[1], capture_status);
+            std::fclose(f);
+        }
+    }
     if (client.Connected()) {
         const IssBionicPerf::Scope send_timer{IssBionicPerf::Stage::AhbSend};
-        if (!client.SendFrame(generation, image_index, frame_counter, width, height, fence_fd)) {
+        if (!client.SendFrame(generation, image_index, frame_counter, width, height, fence_fd, trace_index)) {
             PeerGone();
         }
         // The buffer is the app's until its release.

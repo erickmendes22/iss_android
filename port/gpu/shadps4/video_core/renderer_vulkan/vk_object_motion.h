@@ -29,11 +29,21 @@ public:
         return enabled;
     }
 
+    /// Late passes keep their compiled motion output slot, but cannot change the
+    /// opaque motion pair or any of its CPU history after the depth boundary.
+    [[nodiscard]] bool Collecting() const noexcept {
+#ifdef ISS_ANDROID_BIONIC
+        return enabled && !scene_sealed;
+#else
+        return enabled;
+#endif
+    }
+
     using DrawInfo = Motion::Draw;
     u32 PrepareDraw(const DrawInfo& draw);
     /// Small skeletons: whether the bone palette changed (Motion::History::Moving).
     bool Moving(const Motion::History::GateKey& key, u64 palette) {
-        return history.Moving(key, palette);
+        return Collecting() && history.Moving(key, palette);
     }
     /// Index range and topology hash of an indexed draw, reused across frames.
     template <class Scan>

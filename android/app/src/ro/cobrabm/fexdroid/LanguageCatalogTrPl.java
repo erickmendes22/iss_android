@@ -120,11 +120,11 @@ final class LanguageCatalogTrPl {
   {"Import saves (ZIP)","Kayıtları içe aktar (ZIP)","Importuj zapisy (ZIP)"},
   {"Import or export saves with the game closed.","Oyun kapalıyken kayıtları içe veya dışa aktarın.","Importuj lub eksportuj zapisy przy wyłączonej grze."},
   {"Export latest log","Son günlüğü dışa aktar","Eksportuj ostatni dziennik"},
-  {"Capture FSR3 image (2 frames)","FSR3 görüntüsünü yakala (2 kare)","Przechwyć obraz FSR3 (2 klatki)"},
+  {"Capture FSR3 sequence","FSR3 dizisini yakala","Przechwyć sekwencję FSR3"},
   {"Input, depth, motion and output — export ZIP in Settings","Giriş, derinlik, hareket ve çıkış — ZIP'i Ayarlar'dan dışa aktarın","Wejście, głębia, ruch i wyjście — eksportuj ZIP w Ustawieniach"},
   {"Cannot create capture folder.","Yakalama klasörü oluşturulamıyor.","Nie można utworzyć folderu przechwytywania."},
   {"FSR capture request failed: ","FSR yakalama isteği başarısız: ","Żądanie przechwytywania FSR nie powiodło się: "},
-  {"FSR capture requested; play normally, then export ZIP in Settings.","FSR yakalama istendi; normal oynayın, ardından ZIP'i Ayarlar'dan dışa aktarın.","Zlecono przechwytywanie FSR; graj normalnie, potem wyeksportuj ZIP w Ustawieniach."},
+  {"FSR capture requested; play for 10 seconds, then export ZIP in Settings.","FSR yakalama istendi; 10 saniye oynayın, ardından ZIP'i Ayarlar'dan dışa aktarın.","Zlecono przechwytywanie FSR; graj przez 10 sekund, potem wyeksportuj ZIP w Ustawieniach."},
   {"Export FSR3 image capture (ZIP)","FSR3 görüntü yakalamasını dışa aktar (ZIP)","Eksportuj przechwycony obraz FSR3 (ZIP)"},
   {"No complete FSR3 capture yet. Use Capture FSR3 in the in-game menu and play a few seconds.","Henüz eksiksiz FSR3 yakalaması yok. Oyun menüsünde FSR3 yakalamayı kullanın ve birkaç saniye oynayın.","Brak pełnego przechwycenia FSR3. Wybierz przechwytywanie FSR3 w menu gry i pograj kilka sekund."},
   {"Exporting FSR3 frame data…","FSR3 kare verileri dışa aktarılıyor…","Eksportowanie danych klatek FSR3…"},
@@ -293,6 +293,12 @@ final class LanguageCatalogTrPl {
   {"FSR Quality","FSR Kalite","FSR Jakość"},
   {"FSR Balanced","FSR Dengeli","FSR Zrównoważony"},
   {"FSR Performance","FSR Performans","FSR Wydajność"},
+  {"Stage binding cache without prep workers","Hazırlık iş parçacıkları olmadan aşama kaynak önbelleği","Pamięć podręczna zasobów etapów bez wątków przygotowania"},
+  {"Fast Draw: reuse shader pipeline selection (experimental)","Fast Draw: gölgelendirici işlem hattı seçimini yeniden kullan (deneysel)","Fast Draw: ponownie użyj wyboru potoku shaderów (eksperymentalne)"},
+  {"Fast Draw: reuse identical pipeline binds","Fast Draw: aynı işlem hattı bağlamalarını yeniden kullan","Fast Draw: ponownie używaj identycznych powiązań potoku"},
+  {"Reuse identical Vulkan descriptors","Aynı Vulkan tanımlayıcılarını yeniden kullan","Ponownie używaj identycznych deskryptorów Vulkan"},
+  {"Partial descriptor updates (experimental)","Kısmi tanımlayıcı güncellemeleri (deneysel)","Częściowe aktualizacje deskryptorów (eksperymentalne)"},
+  {"Vulkan secondary passes: depth only (experimental)","Vulkan ikincil geçişleri: yalnızca derinlik (deneysel)","Dodatkowe przebiegi Vulkan: tylko głębia (eksperymentalne)"},
   };
   for(String[] row:rows)TEXT.put(row[0],new String[]{row[1],row[2]});
  }

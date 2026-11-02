@@ -1,0 +1,46 @@
+{
+  "repository": "erickmendes22/iss_android",
+  "artifact_id": 13106552333,
+  "artifact_sha256": "b8788996c2bab86ecb02f308f183529b51075adad616afd30c39dfa2425f7c58",
+  "apk": "inFAMOUS-Second-Son-Daedalus-v0.2.apk",
+  "apk_sha256": "fa7811bf2380ca4e7466e1095770f4cfaa438ce7f2de192f8d7685c0fa3e3c94",
+  "runtime_sha256": "1c2cba546a98c58c05e4d44d90bf1c5d6da36a4fbdf00e54e094fe996c53340d",
+  "bloodframe_commit": "c29027555cfa8c9fc73c20f03816230becb9f469",
+  "source_commit": "a70fc8001c0ecdd468e239ce2ce0e19312665574",
+  "compatibility_inputs": {
+    "tools/android/bionic/patch_bloodframe_host_sync.py": "7b897b4912f97037df9ab89a346e76600f7aa644a1f8a099bb957ad552f19c02",
+    "tools/android/lsfg/bb_lsfg.h": "ecefd26d0ccfa2121df220bac06c9fca4807417592a07160c120ef5adc0ff2b9"
+  },
+  "files": {
+    "issport/arm64/lib/libbloodframe.so": {
+      "sha256": "141552bc5697cb2bea87f2f810c79605a55df60e62e18ca9edcb3585295dd30a",
+      "size": 1274120,
+      "output": "lib/libbloodframe.so"
+    },
+    "issport/licenses/bloodframe-dxbc.LICENSE": {
+      "sha256": "a5cb1a6ded7d2d7e92d550ba28edd21be2d1d4044662b399887351023e30ce64",
+      "size": 1074,
+      "output": "licenses/bloodframe-dxbc.LICENSE"
+    },
+    "issport/licenses/bloodframe-lsfg-vk.LICENSE.md": {
+      "sha256": "828512d34329496a4f73b45fa171173311b7cc21b68c11e21a0ed6660e581c20",
+      "size": 1202,
+      "output": "licenses/bloodframe-lsfg-vk.LICENSE.md"
+    },
+    "issport/licenses/bloodframe-pe-parse.LICENSE": {
+      "sha256": "5fb0c373b1b1077d3ae66fab21516a3c58dc2265e0480e526aaa8ff8da377dc6",
+      "size": 1078,
+      "output": "licenses/bloodframe-pe-parse.LICENSE"
+    },
+    "issport/licenses/bloodframe-source.txt": {
+      "sha256": "fa1228d2dfb3618b2ebfe5f0e7dcc5ea7516c7c197ec9c4f4cd9a0676890b7f2",
+      "size": 110,
+      "output": "licenses/bloodframe-source.txt"
+    },
+    "issport/licenses/bloodframe-volk.LICENSE.md": {
+      "sha256": "33c831f76b79501665e66c23ac8f876020457c216d44526a8f747da897999b35",
+      "size": 1066,
+      "output": "licenses/bloodframe-volk.LICENSE.md"
+    }
+  }
+}

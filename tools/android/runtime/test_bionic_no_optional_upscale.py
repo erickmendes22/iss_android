@@ -66,26 +66,20 @@ class BionicFsr3Tests(unittest.TestCase):
         build = (ROOT / 'tools/android/bionic/build_apk.sh').read_text()
         self.assertIn("package: name='com.daedalus.iss.bionic'", build)
 
-    def test_fsr3_user_requested_capture_is_bounded_and_exportable(self):
+    def test_performance_build_disables_capture_and_removes_capture_actions(self):
         src = ROOT / "android/app/src/ro/cobrabm/fexdroid"
         game = (src / "BionicGameActivity.java").read_text()
         menu = (src / "BionicPlayerMenu.java").read_text()
         launcher = (src / "BionicMainActivity.java").read_text()
-        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
-        self.assertIn('e.put("TLG_DUMP_FRAMES","2")', game)
-        self.assertIn('e.put("TLG_DUMP_TRIGGER"', game)
-        self.assertIn('e.put("TLG_DUMP_DIR"', game)
-        self.assertIn('FileOutputStream stream=new FileOutputStream(trigger,false)', menu)
-        self.assertIn('if(activity.getSharedPreferences("iss",0).getBoolean("fsr3",false))', menu)
-        self.assertIn('DumpImages(instance, scheduler, cmdbuf, dump,', renderer)
-        self.assertIn('if (const int dump = DumpFrame(); dump >= 0)', renderer)
-        self.assertIn('{vk::Image(ui_image), ow, oh, 4, "output", "rgba"}', renderer)
-        self.assertIn('new java.util.zip.ZipOutputStream(output)', launcher)
-        self.assertIn('EXPORT_FSR=12', launcher)
-        self.assertIn('new java.util.zip.ZipEntry("iss-android.log")', launcher)
-        # Different Android application IDs and ephemeral signatures are forbidden.
-        manifest = (ROOT / "android/app/BionicAndroidManifest.xml").read_text()
-        self.assertIn('package="com.daedalus.iss.bionic"', manifest)
+        script = (ROOT / "tools/android/bionic/run-bionic.sh").read_text()
+        self.assertNotIn('TLG_DUMP_TRIGGER', game)
+        self.assertNotIn('captureFsr3', menu)
+        self.assertNotIn('EXPORT_FSR', launcher)
+        self.assertIn('Export latest log', launcher)
+        self.assertIn('export ISS_FSR3_CAPTURE=0 ISS_FSR3_DIAGNOSTICS=0', script)
+        self.assertIn('${ISS_COMPARE_STATS:-0}', script)
+        self.assertIn('unset TLG_DUMP_TRIGGER', script)
+
     def test_iss_native_camera_reprojection_order(self):
         import math
         camera_cpp = (GPU / "shadps4/video_core/renderer_vulkan/vk_camera_motion.cpp").read_text()
@@ -277,7 +271,7 @@ class BionicFsr3Tests(unittest.TestCase):
                     'ui_draws_after_fsr', 'redirected_color',
                     'redirected_samples', 'ui_only_copies'):
             self.assertIn(key, upscaler_h)
-        self.assertIn('if (Active() && ++android_fsr_probe.frames >= 180)', renderer)
+        self.assertIn('if (IssFsrDiagnostics::Enabled() && Active() && ++android_fsr_probe.frames >= 180)', renderer)
         self.assertIn('native_camera_dispatches', upscaler_h)
         self.assertIn('fallback_motion_dispatches', upscaler_h)
         self.assertIn('if (camera_motion.IssNativeCameraReady()) {', renderer)

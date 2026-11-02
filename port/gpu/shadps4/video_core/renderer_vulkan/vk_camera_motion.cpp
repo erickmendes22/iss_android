@@ -9,6 +9,7 @@
 #include "tlg_toggles.h"
 #ifdef ISS_ANDROID_BIONIC
 #include "../../../tlggpu.h"
+#include "iss_scene_camera.h"
 #endif
 
 #include "video_core/host_shaders/camera_motion_comp.h"
@@ -198,7 +199,9 @@ void CameraMotion::PrepareIssNativeCamera() {
     // between those calls must not replace the camera pair within one GPU frame.
     if (!for_upscaler || !depth_id || native_frame_prepared) return;
     native_frame_prepared = true;
-    const TlgIssCameraSnapshot sample = native_submission_camera;
+    const TlgIssCameraSnapshot sample =
+        native_require_scene_match && !native_scene_camera_selected
+            ? TlgIssCameraSnapshot{} : native_submission_camera;
     const u64 sequence = sample.sequence;
     if (!sequence) {
         native_previous_valid = native_motion_valid = false;
@@ -257,6 +260,26 @@ void CameraMotion::PrepareIssNativeCamera() {
             }
         }
     }
+    // +0x430 is camera-relative: its inverse is valid but contains no world
+    // translation. +0x200 has the same basis and the missing translated row.
+    // view_transform * inverse(composite) must therefore be a translation.
+    std::array<double, 3> camera_origin{};
+    for (int row = 0; row < 4 && inverse_ok; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            double value = 0.0;
+            for (int k = 0; k < 4; ++k) {
+                value += double(sample.view_transform[row * 4 + k]) *
+                         double(sample.inverse[k * 4 + col]);
+            }
+            if (!std::isfinite(value) ||
+                ((row < 3 || col == 3) &&
+                 std::abs(value - double(row == col)) > 0.02)) {
+                inverse_ok = false;
+                break;
+            }
+            if (row == 3 && col < 3) camera_origin[col] = value;
+        }
+    }
     if (!inverse_ok) {
         native_previous_valid = native_motion_valid = false;
         current.valid = previous.valid = false;
@@ -303,10 +326,13 @@ void CameraMotion::PrepareIssNativeCamera() {
     if (native_motion_valid) {
         // PS4/inFAMOUS stores row-vector camera matrices. For a homogeneous
         // CURRENT clip-space row vector, the PREVIOUS clip coordinate is:
-        //   clip_previous = clip_current * inverse(current) * composite(previous)
+        //   clip_previous = clip_current * inverse(relative_current) *
+        //                   T(C_current-C_previous) * relative_previous
         // The GLSL shader instead computes dot(row, column_vector), so upload
         // the TRANSPOSE of this product. The earlier previous*inverse product
         // was mathematically incorrect despite passing camera-inverse checks.
+        // Inverse validation alone also cannot establish that a camera-relative
+        // matrix contains world translation: it does not.
         // For a captured static-camera jitter pair the correct transform has
         // about (+0.00104,-0.00185) XY translation in its last row; the old
         // product wrongly placed motion in the Z-dependent matrix entries.
@@ -318,8 +344,17 @@ void CameraMotion::PrepareIssNativeCamera() {
                     // C[row,col] = sum_k inv(current)[col,k] * prev[k,row].
                     // The old indices computed transpose(prev * inv(current)),
                     // leaving camera reprojected vectors near zero during motion.
-                    value += double(sample.inverse[col * 4 + k]) *
-                             double(native_previous_composite[k * 4 + row]);
+                    double previous_clip = native_previous_composite[k * 4 + row];
+                    if (k == 3) {
+                        // inv(relative_current) * T(C_current-C_previous) *
+                        // relative_previous; camera_origin stores -C.
+                        for (int axis = 0; axis < 3; ++axis) {
+                            previous_clip +=
+                                (native_previous_origin[axis] - camera_origin[axis]) *
+                                double(native_previous_composite[axis * 4 + row]);
+                        }
+                    }
+                    value += double(sample.inverse[col * 4 + k]) * previous_clip;
                 }
                 if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
                     native_motion_valid = false;
@@ -333,6 +368,7 @@ void CameraMotion::PrepareIssNativeCamera() {
     }
     std::memcpy(native_previous_composite.data(), sample.composite,
                 sizeof(sample.composite));
+    native_previous_origin = camera_origin;
     native_previous_object = sample.guest_object;
     native_previous_sequence = sequence;
     native_previous_jitter_ndc = guest_jitter_ndc;
@@ -433,7 +469,19 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
 
 #ifdef ISS_ANDROID_BIONIC
 void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const void* bytes) {
-    if (!NeedGBufferSamples() || !bytes || size < 24 || size > 65536) return;
+    if (!NeedGBufferSamples(hash, slot, size) || !bytes || size < 24 || size > 65536) return;
+    if (native_require_scene_match && !native_scene_camera_selected && !native_frame_prepared) {
+        TlgIssCameraSnapshot matched{};
+        if (IssSceneCamera::Select(native_submission_candidates, native_previous_object,
+                                   hash, slot, size, bytes, matched)) {
+            native_submission_camera = matched;
+            native_scene_camera_selected = true;
+            ++native_scene_matches;
+            if (matched.sequence != native_submission_candidates.sequence) ++native_non_scene_latest;
+        }
+    }
+    if (!IssFsrDiagnostics::Enabled() || android_binding_samples_done ||
+        android_binding_sample_count >= android_binding_samples.size()) return;
     for (u32 i = 0; i < android_binding_sample_count; ++i) {
         const auto& item = android_binding_samples[i];
         if (item.shader_hash == hash && item.size == size) return;
@@ -450,7 +498,7 @@ void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const voi
 
 void CameraMotion::OnConstants(const float* data) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_constants;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_constants;
 #endif
     // Scene constants: far plane 3000, 1/far, and the render size.
     if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
@@ -458,7 +506,7 @@ void CameraMotion::OnConstants(const float* data) {
         return;
     }
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_signature;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_signature;
 #endif
     if (frame_has_camera) {
         return; // the first one of a frame is the main camera
@@ -478,14 +526,15 @@ void CameraMotion::OnConstants(const float* data) {
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 #ifdef ISS_ANDROID_BIONIC
-    ++android_probe_gbuffer;
+    if (IssFsrDiagnostics::Enabled()) ++android_probe_gbuffer;
+    if (depth != depth_id && !native_frame_prepared) native_scene_camera_selected = false;
 #endif
     depth_id = depth;
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
 #ifdef ISS_ANDROID_BIONIC
-    if (for_upscaler) {
+    if (IssFsrDiagnostics::Enabled() && for_upscaler) {
         // Report the ordered submission snapshot, not a newer CPU publication.
         const TlgIssCameraSnapshot sample = native_submission_camera;
         const u64 sequence = sample.sequence;
@@ -535,16 +584,18 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         android_camera_log_count);
             std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
                         "current_native=%u repeated=%u missing=%u matrix=%u jitter=%u "
-                        "seed=%u camera_switch=%u sequence_gap=%u transform=%u\n",
+                        "seed=%u camera_switch=%u sequence_gap=%u transform=%u "
+                        "scene_matches=%u non_scene_latest=%u\n",
                         native_frames_valid, native_frames_rejected,
                         unsigned(native_motion_valid), native_frames_repeated,
                         native_reject_missing, native_reject_matrix, native_reject_jitter,
                         native_reject_seed, native_reject_switch, native_reject_gap,
-                        native_reject_transform);
+                        native_reject_transform, native_scene_matches, native_non_scene_latest);
             native_frames_valid = native_frames_rejected = 0;
             native_frames_repeated = native_reject_missing = native_reject_matrix = 0;
             native_reject_jitter = native_reject_seed = native_reject_switch = 0;
             native_reject_gap = native_reject_transform = 0;
+            native_scene_matches = native_non_scene_latest = 0;
             android_camera_frame_updates = 0;
         }
 
@@ -600,6 +651,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     depth_id = {};
 #ifdef ISS_ANDROID_BIONIC
     native_frame_prepared = false;
+    native_scene_camera_selected = false;
 #endif
 }
 
