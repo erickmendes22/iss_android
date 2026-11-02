@@ -36,6 +36,49 @@ template <typename Copies>
     return false;
 }
 
+// CollectDownloads emits nonempty, ordered, disjoint byte ranges. Their final
+// pages are therefore nondecreasing even when several islands share one page.
+// Avoid walking every island on each unrelated CPU/GPU write. Tiny lists retain
+// the original linear path; no index allocation or snapshot state is needed.
+template <typename Copies>
+[[nodiscard]] bool OrderedReadbackCopyPagesOverlap(std::uint64_t arena_base,
+                                                  const Copies& copies,
+                                                  std::uint64_t start,
+                                                  std::uint64_t end) noexcept {
+    if (copies.size() <= 32) {
+        return ReadbackCopyPagesOverlap(arena_base, copies, start, end);
+    }
+    if (end <= start) {
+        return false;
+    }
+    constexpr unsigned PageShift = 12;
+    const std::uint64_t first_page = start >> PageShift;
+    const std::uint64_t last_page = (end - 1) >> PageShift;
+    const auto& first = copies[0];
+    if (last_page < ((arena_base + first.srcOffset) >> PageShift)) {
+        return false;
+    }
+    if (first_page <= ((arena_base + first.srcOffset + first.size - 1) >> PageShift)) {
+        return true; // preserve the one-inspection common hit at the first island
+    }
+    const auto& last = copies[copies.size() - 1];
+    if (first_page > ((arena_base + last.srcOffset + last.size - 1) >> PageShift)) {
+        return false;
+    }
+    std::size_t lo = 1, hi = copies.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        const auto& copy = copies[mid];
+        if (((arena_base + copy.srcOffset + copy.size - 1) >> PageShift) < first_page) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo < copies.size() &&
+           ((arena_base + copies[lo].srcOffset) >> PageShift) <= last_page;
+}
+
 // Visit contiguous sets of pages containing source copies, not an entire
 // readback prefetch window. Copies are in ascending guest-address order:
 // CollectDownloads walks the modified-region bitmaps and sorted dirty intervals.

@@ -1,32 +1,62 @@
-# Roll back build 73 protected-readback experiments after reported FPS loss
+# Protected-readback regression investigation and ordered page lookup
 
-The user tested build 73 and reported lower FPS. The package had enabled four
-performance experiments together; passing host correctness tests did not establish
-a speedup on the phone, and there is no captured phone trace isolating one change.
+Build 73 regressed FPS in the user's phone test. Its four combined experiments
+were removed in bd27d9731c8ebbbe776a675b3050fb2f6e65d87b. Correctness tests had not
+established a phone performance benefit. The specific cause of that phone run
+cannot be attributed without a trace, but one extra-work mechanism was reproduced.
 
-Restore the GPU source and production runtime fixtures exactly to build 71
-(`abb10993a7416edb020757b3b31a56ef77889a59`). Remove the private queue, requested-page
-producer selection, page-scoped Hybrid staging and small-buffer arena promotion.
-Restore the scheduler's original wait-stage policy too: build 73 widened every
-wait to ALL_COMMANDS, including waits unrelated to readback. The private queue's
-WAR guard also made every following graphics submission depend on its last copy.
-These are concrete additional synchronization costs, not a proven attribution of
-the phone's FPS loss. No speculative replacement is enabled in the rollback.
+## Reproduced batching regression
 
-The original protected Hybrid mode behind “Precise 2”, camera/world-origin/jitter
-fixes and disabled FSR capture/heavy profiling are preserved. The Bloodframe
-bootstrap below is build preparation only; its library is identical to build 71.
+A controlled harness ran the production build-71 StartDeferredReadback,
+FinishDeferredReadback and CollectDownloads with the production build-73
+GetReadbackWindow policy. It requested 4 useful bytes on each of 128 pages inside
+one 512-KiB window. Requested producers were complete (tick 7), a neighbor was
+unfinished (tick 9), and the only copy path was the graphics queue (current tick 10).
 
-Regression validation: require a zero diff against build 71 for all files under
-`port/` and `tools/android/runtime/`, except the independent Bloodframe recovery
-tests. The restored submission/Hybrid/recovery tests pass (15 cases), as do the restored
-production mapped/staged lifecycle tests (3 cases). Reuse the already compiled,
-signed and verified build 71 APK for immediate rollback instead of recompiling an
-identical renderer. On-device FPS recovery still needs user validation.
+| Window policy | Copy commands | Flushes | Guest waits | Useful bytes copied |
+| --- | ---: | ---: | ---: | ---: |
+| Build 71 batching | 1 | 1 | 1 | 512 |
+| Build 73 requested-page narrowing | 2 | 2 | 2 | 512 |
 
-Rollback APK: https://github.com/erickmendes22/iss_android/actions/runs/41363054526/artifacts/13106552333
+The narrow first copy still enters the graphics stream and waits through newer
+work. After it completes, reading the next page needs a second copy. A smaller
+first transfer therefore adds a submission/wait without reducing total copied
+bytes in this case. This demonstrates a performance regression mechanism, not an
+FPS estimate or proof that it alone explains the phone's reported slowdown.
 
-This restores the pre-regression baseline; it is not a new performance improvement.
+The production lifecycle fixture now uses the real GetReadbackWindow method
+instead of a fixed-window stub. Its hybrid_batching case enforces one copy,
+Flush and wait for this sequence. The ordinary 512-KiB Hybrid staging envelope is
+preserved. No private queue, small-buffer arena promotion, new partial-Hybrid
+publication or global ALL_COMMANDS wait widening is re-enabled.
+
+## Single isolated CPU optimization
+
+GPU-write invalidation and CPU-write handling repeatedly call CopiesTouchPages.
+For large snapshots the prior predicate walked every copied island, including
+writes outside the snapshot. CollectDownloads already emits nonempty, ascending,
+disjoint byte intervals: tracker pages are visited in order, and dirty intervals
+are enumerated and subtracted in order. Thus interval end pages are nondecreasing,
+even with several islands on the same page.
+
+OrderedReadbackCopyPagesOverlap keeps the original linear path for at most 32
+copies. For larger lists it rejects writes outside the copied-page envelope in
+two inspections, then binary-searches the first interval whose end page reaches
+the query. It allocates nothing, mutates no snapshot state, and keeps the same
+4-KiB invalidation granularity and old linear helper as the reference predicate.
+
+The differential fixture covers 743,648 queries, unaligned arena origins, shared
+pages, multi-page islands, exact borders, empty queries and sizes across the
+linear/binary threshold under UBSan. For a 128-island snapshot an outside write
+requires 2 copy inspections instead of 128; an internal gap requires at most 11
+instead of 128. The common first-island hit stays at one inspection even for long lists. Lists
+through 32 copies perform the same inspections as before. These are
+bounded CPU-work results, not a whole-frame or phone FPS claim.
+
+The protected Hybrid behind Precise 2, scene camera/world-origin/jitter fixes,
+disabled FSR capture/heavy profiling, buffer residency and GPU synchronization
+remain at the build-71 baseline. The Bloodframe binary is unchanged. CI builds
+and signs one ARM64 APK for this isolated change, with the original certificate.
 
 ## Build dependency recovery
 

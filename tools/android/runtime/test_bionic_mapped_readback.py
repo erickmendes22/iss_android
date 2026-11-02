@@ -111,6 +111,7 @@ int main() {
             "void BufferCache::MarkDeferredStale(",
             "bool BufferCache::PrepareMappedReadback(", "bool BufferCache::CaptureMappedReadback(",
             "u64 BufferCache::CollectDownloads(",
+            "std::tuple<const Buffer*, VAddr, VAddr> BufferCache::GetReadbackWindow(",
             "std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadback(",
             "bool BufferCache::FinishDeferredReadback(", "void BufferCache::RecoverDeferredReadback(",
             "void BufferCache::SettleDeferredReadbacks(", "void BufferCache::PruneDeferredReadbacks()",
@@ -128,7 +129,7 @@ int main() {
                  "partial_new_request", "partial_new_request_ready",
                  "priority_inflight", "priority_ready", "priority_neighbor_ready", "priority_same_tick",
                  "priority_current", "priority_join", "priority_join_ready", "priority_coherent", "priority_noncoherent",
-                 "hybrid_stage_write", "hybrid_stage_gap", "hybrid_targeted_pages")
+                 "hybrid_stage_write", "hybrid_stage_gap", "hybrid_targeted_pages", "hybrid_batching")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))

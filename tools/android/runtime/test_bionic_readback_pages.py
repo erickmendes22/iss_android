@@ -10,6 +10,18 @@ BUFFER = ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp"
 BUFFER_HDR = ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.h"
 
 class ReadbackCopyPagesTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("c++"), "host C++ compiler unavailable")
+    def test_ordered_lookup_matches_reference_and_bounds_query_work(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "page_lookup"
+            subprocess.run(["c++", "-std=c++20", "-O2",
+                            "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                            "-I", str(ROOT / "port/gpu/shadps4"),
+                            str(ROOT / "tools/android/runtime/cpp/readback_page_lookup.cpp"),
+                            "-o", str(binary)], check=True, capture_output=True, text=True)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+            self.assertIn("linear=128 ordered=2", result.stdout)
+
     def test_calls_use_copied_pages_not_prefetch_window(self):
         body = BUFFER.read_text()
         self.assertIn("readback->CopiesTouchPages(start, end)", body)
