@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "eboot": "2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab",
+  "modules": {
+    "libc.prx": "9e8096d917f986a63e2f829f01d18acac7828914a7a18e34fb616faf97cc18af",
+    "libSceFios2.prx": "395cf34b614e3236f399cede658f75863efdec7a332d401011222ee9026696c2"
+  },
+  "compiler": "406df6e596da90097224b371f01ae3224cfe8ebdcdbccf3765be5914a81fc8f2",
+  "tso": false
+}

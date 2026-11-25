@@ -33,7 +33,7 @@ std::mutex Scheduler::submit_mutex;
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
 #ifdef ISS_ANDROID_BIONIC
-    if (threaded_recording) { // the draw scheduler; excludes presentation and generated frames
+    if (threaded_recording && IssBionicPerf::Enabled()) { // Vulkan timestamps are diagnostic work on every submission
         const auto physical = instance.GetPhysicalDevice();
         const auto families = physical.getQueueFamilyProperties();
         const u32 bits = families[instance.GetGraphicsQueueFamilyIndex()].timestampValidBits;

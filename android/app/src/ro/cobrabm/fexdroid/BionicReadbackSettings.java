@@ -62,14 +62,14 @@ final class BionicReadbackSettings {
   optimized.setText(AppLanguage.text(
       "Experimental: reduce unused GPU fence copies (backoff 63 instead of 7)",
       "Experimental: reduzir cópias GPU não utilizadas (backoff 63 em vez de 7)"));
-  optimized.setChecked(preferences.getBoolean(BACKOFF_KEY,false));
+  optimized.setChecked(preferences.getBoolean(BACKOFF_KEY,true));
   optimized.setPadding(0,pad/2,0,pad/2);
   body.addView(optimized);
   CheckBox targeted = new CheckBox(activity);
   targeted.setText(AppLanguage.text(
       "Performance experiment: demand-driven staged readbacks",
       "Teste de desempenho: readbacks seletivos por páginas solicitadas"));
-  targeted.setChecked(preferences.getBoolean(TARGETED_KEY,false));
+  targeted.setChecked(preferences.getBoolean(TARGETED_KEY,true));
   targeted.setPadding(0,pad/2,0,pad/2);
   body.addView(targeted);
   int initialVisibility=choices.getCheckedRadioButtonId()==ids[1] ? View.VISIBLE : View.GONE;

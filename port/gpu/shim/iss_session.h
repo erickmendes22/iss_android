@@ -61,8 +61,8 @@ public:
         unsigned p99 = 0, cumulative = intervals[0];
         while (p99 < 200 && cumulative * 100 < frames * 99)
             cumulative += intervals[++p99];
-        std::printf("FRAME_PACE source=guest_flip p99_ms=%u capped_ms=200 over33=%u over50=%u frames=%u\n",
-                    p99, over33, over50, frames);
+        std::printf("FRAME_PACE source=guest_flip p99_ms=%u capped_ms=200 over33=%u over50=%u frames=%u source_fps=%.2f\n",
+                    p99, over33, over50, frames, frames * 1e9 / double(now - start));
         std::printf("SESSION_SETTINGS fps_limit=%d quality_target=%d quality_floor=%d supported=%d\n",
                     limit, target, level ? governor.Level() : 0, int(level != nullptr));
         const auto busy = gpu_busy_ns.exchange(0, std::memory_order_relaxed);

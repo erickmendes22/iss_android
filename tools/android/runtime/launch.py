@@ -3,6 +3,7 @@
 Never require GoW3/Last Guardian resource layouts or silently enable their patches.
 The ARM64 Python and probe are always run through the explicit Linux/glibc loader.
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -131,25 +132,50 @@ def main():
         subprocess.run([*command, str(name), *map(str, arguments)], check=True, env=env)
         print(f"ISS preparation complete: {script}", flush=True)
 
-    run_step("prepare", game, "--out", out)
-    # link_modules uses boot.bin directly; link_libc is not a prerequisite.
     native_aot = bionic and (root / "aot/profile.json").is_file()
-    run_step("link_modules", game, "--out", out, *(["--native-runtime"] if native_aot else []))
-    run_step("content_profile", game, "--out", out, "--sku", "full")
-    run_step("patches", "--out", out, "--extra", env.get("ISS_PATCHES", ""),
-             "--game-dir", game, "--patches-dir", data / "patches",
-             "--patches-config", data / "patches.json")
+    if env.get("ISS_AOT_MODE"):
+        if not native_aot:
+            raise RuntimeError("Native AOT profile is missing")
     image = out / "boot-linked.bin"
-    if not image.is_file() or image.stat().st_size == 0:
-        raise SystemExit("ISS preparation: boot-linked.bin was not produced.")
-    for artifact in ("content.bin", "patches.bin"):
-        if not (out / artifact).is_file():
-            raise SystemExit(f"ISS preparation: missing {artifact}")
+    marker = out / 'aot-launch.json'
+    token = env.get('ISS_AOT_TOKEN', '')
+    mode = env.get('ISS_AOT_MODE')
+    if native_aot and (not token or mode not in ('prepare','run')):
+        raise RuntimeError('Open the launcher to prepare native AOT first')
+    if native_aot and mode == 'run':
+        ready = json.loads(marker.read_text())
+        if ready['token'] != token or ready['game'] != str(game) or ready['patches'] != env.get('ISS_PATCHES', ''):
+            raise RuntimeError('AOT configuration changed. Return to the launcher.')
+        library = Path(ready['library'])
+        if not all(p.is_file() for p in (library, image, out/'patches.bin', out/'content.bin')):
+            raise RuntimeError('Prepared AOT files are missing')
+        env['BB_AOT'] = str(library)
+        env['BB_AOT_MISS_LOG'] = str(out/'aot-misses.log')
+    else:
+        run_step("prepare", game, "--out", out)
+        # link_modules uses boot.bin directly; link_libc is not a prerequisite.
+        run_step("link_modules", game, "--out", out, *(["--native-runtime"] if native_aot else []))
+        run_step("content_profile", game, "--out", out, "--sku", "full")
+        run_step("patches", "--out", out, "--extra", env.get("ISS_PATCHES", ""),
+                 "--game-dir", game, "--patches-dir", data / "patches",
+                 "--patches-config", data / "patches.json")
+        if not image.is_file() or image.stat().st_size == 0:
+            raise SystemExit("ISS preparation: boot-linked.bin was not produced.")
+        for artifact in ("content.bin", "patches.bin"):
+            if not (out / artifact).is_file():
+                raise SystemExit(f"ISS preparation: missing {artifact}")
 
-    if native_aot:
-        from iss_android_aot import select
-        env["BB_AOT"] = str(select(game, out, root))
-        env["BB_AOT_MISS_LOG"] = str(out / "aot-misses.log")
+        if native_aot:
+            from iss_android_aot import select
+            env["BB_AOT"] = str(select(game, out, root))
+            env["BB_AOT_MISS_LOG"] = str(out / "aot-misses.log")
+            print('ISS-AOT loading', flush=True)
+            subprocess.run([str(probe), '--cpu-features'], env=env, check=True)
+            pending = marker.with_suffix('.tmp')
+            pending.write_text(json.dumps(dict(token=token, game=str(game), patches=env.get('ISS_PATCHES',''), library=env['BB_AOT'])))
+            pending.replace(marker)
+            print('ISS-AOT ready ' + token, flush=True)
+            return
     args = ([str(probe)] if bionic else [str(loader), str(probe)]) + [
             str(image), "--content-profile", str(out / "content.bin"),
             "--patches", str(out / "patches.bin"),

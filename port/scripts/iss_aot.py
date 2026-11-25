@@ -17,14 +17,16 @@ from patches import game_profile, game_title_id
 from prepare import prepare
 
 
-def compile_image(game, work, compiler, jobs, bundle):
+def compile_image(game, work, compiler, jobs, bundle, extra_entries=None):
     library = work / 'libIssAot.so'
     stats = work / 'compile.txt'
     command = [str(compiler), '--boot', str(work / 'boot-linked.bin'),
                '--elf', str(work / 'eboot.elf'), '--prx-dir', str(game / 'sce_module'),
                '--so', str(library), '--stats', str(stats), '--target', 'aarch64',
                '--host', 'armv8.2', '--resume-entries', '--no-callee-saved',
-               '-O1', '--jobs', str(jobs), '--shards', '64', '--no-nice']
+               '-O1', '--jobs', str(jobs), '--shards', '128', '--no-nice', '--progress']
+    if extra_entries is not None:
+        command.extend(['--extra-entries', str(extra_entries)])
     if bundle:
         command.extend(['--bundle-dir', str(bundle)])
     subprocess.run(command, cwd=work, check=True)

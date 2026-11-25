@@ -34,7 +34,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private volatile Process game;
  private boolean destroyed,started,failed;
  private String files,base,screenMode;
- private long lastFrames=-1;
+ private volatile long lastFrames=-1;
  private float lastObservedRefresh=-1;
  private synchronized void record(String line){
   try(FileOutputStream f=new FileOutputStream(new File(files,"iss.log"),true)){
@@ -49,7 +49,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
-  try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
+  try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
    out.write("inFAMOUS Second Son — Daedalus 0.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
@@ -58,7 +58,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   surface=new SurfaceView(this);frame.addView(surface);
   updateDisplayRate();
   controller=new TouchControllerOverlay(this,pad,false);frame.addView(controller);
-  status=new TextView(this);status.setText(AppLanguage.text("Starting inFAMOUS Bionic…","Iniciando inFAMOUS Bionic…"));
+  status=new TextView(this);status.setText(AppLanguage.text("AOT ready. Waiting for the first frame…","AOT pronto. Aguardando o primeiro quadro…"));
   status.setGravity(Gravity.CENTER);status.setTextColor(0xffe0c891);status.setTextSize(18);
 
   frame.addView(status);
@@ -110,7 +110,6 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   e.put("TLG_PAD_FILE",base+"/android-pad.state");
   e.put("TLG_SHOW_FPS","0");
   e.put("TLG_ANDROID_FPS_ONLY","1");
-  java.util.ArrayList<String> patches=new java.util.ArrayList<>();
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
   BionicRendererSettings.environment(prefs,e);
@@ -129,15 +128,9 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
 
   }
-  String resolution=BionicVideoSettings.effectiveResolutionPatch(prefs);
-  String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
-  if(resolutionPatch!=null)patches.add(resolutionPatch);
-  if(prefs.getBoolean("patch_motion_blur",false))patches.add("Disable motion blur");
-  if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
-  if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
-  if(prefs.getBoolean("patch_shadows",false))patches.add("Disable shadow maps");
-
-  e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
+  e.put("ISS_PATCHES",BionicAotPreparation.patches(prefs));
+  e.put("ISS_AOT_MODE","run");
+  e.put("ISS_AOT_TOKEN",getIntent().getStringExtra("aot_token"));
   e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");
   e.put("TLG_OUTPUT_RES",outputResolution);
   return p.start();
@@ -160,8 +153,20 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
       game=process("/system/bin/sh",base+"/run-bionic.sh");
      }
      try{
-     try(InputStream in=game.getInputStream();FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
-      byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
+     try(BufferedReader in=new BufferedReader(new InputStreamReader(game.getInputStream(),StandardCharsets.UTF_8));
+         BufferedWriter out=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(new File(files,"iss.log"),true),StandardCharsets.UTF_8))){
+      String line; boolean booting=true;
+      while((line=in.readLine())!=null){
+       out.write(line);out.newLine();
+       if(!booting && !in.ready())out.flush();
+       if(booting){
+        out.flush();
+        if(line.startsWith("GPU: window"))bootMessage("Vulkan pronto. Carregando o jogo…");
+        else if(line.startsWith("Starting linked module"))bootMessage("Inicializando os módulos do jogo…");
+        else if(line.startsWith("AOT: image checked"))bootMessage("Código ARM64 carregado. Aguardando vídeo…");
+        if(lastFrames>=0)booting=false;
+       }
+      }
      }
      int exit=game.waitFor();record("Bionic game exited "+exit);
      if(!destroyed&&!restarting)error(AppLanguage.text("Game stopped (","O jogo parou (")+exit+AppLanguage.text("). Export log.","). Exporte o log."));
@@ -208,13 +213,16 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
   main.postDelayed(this::poll,1000);
  }
+ private void bootMessage(String message){
+  main.post(()->{if(!destroyed&&!failed&&lastFrames<0)status.setText(message);});
+ }
  private void error(String message){failed=true;record("ERROR: "+message);main.post(()->{status.setText(message);status.setVisibility(View.VISIBLE);});}
  @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int ht){}
  @Override public void surfaceDestroyed(SurfaceHolder h){}
  private void restartGame(){
   if(restarting||destroyed)return;restarting=true;status.setText(AppLanguage.text("Restarting inFAMOUS…", "Reiniciando inFAMOUS…"));status.setVisibility(View.VISIBLE);
   synchronized(this){if(game!=null)game.destroyForcibly();}
-  worker.execute(()->main.post(()->{if(!destroyed)recreate();}));
+  worker.execute(()->main.post(()->{if(!destroyed){setResult(RESULT_FIRST_USER);finish();}}));
  }
  @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(BionicDriverSettings.result(this,request,result,data))return;if(request==FramegenSettings.IMPORT_DLL&&result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);}
  @Override public void onBackPressed(){if(menu!=null)menu.toggle();}

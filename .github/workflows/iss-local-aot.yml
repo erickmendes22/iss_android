@@ -1,0 +1,73 @@
+name: Second Son Android local AOT
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/second-son-arm64-aot]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: iss-local-aot-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout renderer dependencies
+        run: git submodule update --init --depth 1 -- port/gpu/third_party port/third_party/LibAtrac9
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 41512987210
+          name: iss-android-bionic-perf-apk-6fc684061cd3307c314ad9e0c37683bbb46f1645
+          path: inputs/iss
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: erickmendes22/ShadowOfTheColossus-Android-Aot
+          run-id: 45109431755
+          name: Shadow-of-the-Colossus-Daedalus-AOT-0.2.0-NGS2-AUDIO-UNSIGNED
+          path: inputs/shadow
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: iss-headers
+          create-args: >-
+            cmake ninja pkg-config libboost-headers=1.92 glslang spirv-tools vulkan-memory-allocator magic_enum
+      - name: Build ISS GPU, native AOT CPU and game loader from source
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          export ISS_NDK="$ANDROID_HOME/ndk/29.0.14206865" ISS_JOBS=3 ISS_BIONIC_HEADERS="$CONDA_PREFIX"
+          bash ci/setup-deps.sh "$CONDA_PREFIX"
+          bash tools/android/bionic/build_deps.sh
+          bash tools/android/bionic/build_native_runtime.sh --compile-only
+          bash tools/android/bionic/build_gpu.sh
+          git init -q out/bb-source
+          git -C out/bb-source fetch -q --depth=1 https://github.com/ducvd89/Bloodborne-Android.git b6d4cfb6972c84d4029f54765406ec143df3c30e
+          git -C out/bb-source checkout -q FETCH_HEAD
+          ISS_AOT_UPSTREAM="$PWD/out/bb-source" bash tools/android/aot/build_native_cpu.sh
+          bash tools/android/bionic/build_native_runtime.sh
+          "$ISS_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded out/bionic/lib/*.so out/bionic/bin/iss-probe
+      - name: Assemble upgrade for AOT Local and encrypt private delivery
+        env:
+          ISS_AOT_KEYSTORE_B64: ${{ secrets.ISS_AOT_KEYSTORE_B64 }}
+          ISS_AOT_KEY_PASSWORD: ${{ secrets.ISS_AOT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 tools/android/aot/stage_ci.py inputs/iss/*.apk inputs/shadow/*.apk
+          bash tools/android/aot/assemble_ci.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iss-aot-private-${{ github.run_id }}
+          path: out/aot-apk/delivery.cms
+          if-no-files-found: error
+          retention-days: 14

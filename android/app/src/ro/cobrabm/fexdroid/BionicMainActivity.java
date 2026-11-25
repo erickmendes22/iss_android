@@ -14,6 +14,7 @@ public final class BionicMainActivity extends Activity {
 
  private TextView status; private boolean busy;
  private final java.util.ArrayList<Button> actions=new java.util.ArrayList<>();
+ private static final int GAME_REQUEST=20;
  private static final int IMPORT_SAVE=10, EXPORT_SAVE=11;
  private BionicPkgInstaller pkg;
  private ProgressBar progress;
@@ -55,7 +56,7 @@ public final class BionicMainActivity extends Activity {
   for(int i=0;i<tabs.length;i++){final int index=i;Button b=new Button(this);b.setText(tabs[i]);b.setAllCaps(false);b.setTextSize(12);b.setTextColor(i==page?0xfffff1e9:0xffc7aba8);b.setBackground(background(i==page?0xffad2532:0x00211015,0x00000000));navigation.addView(b,new LinearLayout.LayoutParams(0,dp(62),1));b.setOnClickListener(v->{if(!busy)showPage(index);});}
   ScrollView sc=new ScrollView(this);sc.setFillViewport(true);LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(0,0,0,dp(18));sc.addView(content);pages.addView(sc,new LinearLayout.LayoutParams(-1,-1));
   if(page==0){
-   LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  PLAY", "▶  JOGAR"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));
+   LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  Prepare AOT and play", "▶  Preparar AOT e jogar"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));
    directStart=BionicStartupSettings.toggle(this);game.addView(directStart);actions.add(directStart);
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
    button(video,AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes")+" · "+BionicReadbackSettings.summary(this),()->BionicReadbackSettings.show(this,()->showPage(0)));
@@ -69,7 +70,7 @@ public final class BionicMainActivity extends Activity {
    LinearLayout logs=card(content,AppLanguage.text("LOGS","REGISTROS"));button(logs,AppLanguage.text("Export latest log", "Exportar último log"),()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
    LinearLayout fg=card(content,"LOSSLESS.DLL · BLOODFRAME");button(fg,AppLanguage.text("Import Lossless.dll", "Importar Lossless.dll"),()->FramegenSettings.chooseDll(this));
   }else{
-   LinearLayout about=card(content,"inFAMOUS SECOND SON — DAEDALUS FORK");about.addView(label(AppLanguage.text("Version","Versão")+" 0.2\n"+AppLanguage.text("Android port with a Bionic runtime.","Port para Android com runtime Bionic.")+"\n\n"+AppLanguage.text("Fork and modifications:","Fork e modificações:")+" erickmendes22\nDaedalus Emulator\n\n"+AppLanguage.text("Base project:","Projeto base:")+" HayatoG/iss_pc\n\n"+AppLanguage.text("No game files are included.","Nenhum arquivo do jogo está incluído."),17,0xfffff1e9));button(about,"YouTube · @daedalusemulator",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/@daedalusemulator"))));button(about,"GitHub · iss_android",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/erickmendes22/iss_android"))));
+   LinearLayout about=card(content,"inFAMOUS SECOND SON — DAEDALUS FORK");about.addView(label(AppLanguage.text("Version","Versão")+" 0.2\n"+AppLanguage.text("Android port with a Bionic runtime.","Port para Android com runtime Bionic.")+"\n\n"+AppLanguage.text("Fork and modifications:","Fork e modificações:")+" erickmendes22\nDaedalus Emulator\n\n"+AppLanguage.text("Base project:","Projeto base:")+" HayatoG/iss_pc\n\n"+"ARM64 AOT · CUSA00004 · TSO off\nModified compiler: ducvd89 · GPL-3.0-or-later\nhttps://github.com/ducvd89/Bloodborne-android-rebuild-tool",17,0xfffff1e9));button(about,"YouTube · @daedalusemulator",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/@daedalusemulator"))));button(about,"GitHub · iss_android",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/erickmendes22/iss_android"))));
    LinearLayout help=card(content,AppLanguage.text("CONTROLS", "CONTROLES"));help.addView(label(AppLanguage.text("TOUCH: two fingers to move the car.\nD-pad: gradual swipe; hold a direction to continue.\nGraffiti: L3 + R3 enables the virtual sensor; ✕ shakes the can, R2 sprays and the left stick aims.\n\nOpen the game menu from the left edge or with the Back button.", "TOUCH: dois dedos para mover o carro.\nD-pad: deslize gradual; mantenha pressionado para continuar.\nGrafite: L3 + R3 ativa o sensor virtual; ✕ sacode a lata, R2 pinta e o analógico esquerdo mira.\n\nAbra o menu do jogo pela borda esquerda ou pelo botão Voltar."),16,0xffddc3be));
   }
  }
@@ -115,7 +116,35 @@ public final class BionicMainActivity extends Activity {
  private void launch(){if(busy)return;if(!access()||!gameReady()){beginSetup(true);return;}
   try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){}catch(IOException e){status.setText(e.getMessage());return;}
   String path=getSharedPreferences("iss",0).getString("game_dir","");if(!new File(path,"eboot.bin").canRead()||!new File(path,"art").isDirectory()||!new File(path,"art").canRead()){status.setText(AppLanguage.text("Choose the inFAMOUS game folder containing eboot.bin and readable art/.","Escolha a pasta de inFAMOUS com eboot.bin e art/ acessível."));return;}
-  setBusy(true);status.setText(AppLanguage.text("Preparing runtime…", "Preparando runtime…"));new Thread(()->{try{BionicRuntimeInstaller.install(this);runOnUiThread(()->{setBusy(false);refresh();startActivity(new Intent(this,BionicGameActivity.class).putExtra("game_dir",path));});}catch(Exception e){runOnUiThread(()->{setBusy(false);status.setText(e.toString());});}},"runtime-install").start();}
+  setBusy(true);
+  progress.setIndeterminate(true);
+  status.setText(AppLanguage.text("Preparing native AOT…","Preparando AOT nativo…"));
+  String token=java.util.UUID.randomUUID().toString();
+  String patches=BionicAotPreparation.patches(getSharedPreferences("iss",0));
+  new Thread(()->{
+   try {
+    try(BionicSession.Guard guard=BionicSession.acquire(getFilesDir())){
+     BionicRuntimeInstaller.install(this);
+     BionicAotPreparation.run(this,path,patches,token,(message,percent)->runOnUiThread(()->{
+      if(isDestroyed()||isFinishing())return;
+      status.setText(message);
+      progress.setIndeterminate(percent<0);
+      if(percent>=0)progress.setProgress(percent);
+     }));
+    }
+    runOnUiThread(()->{
+     if(isDestroyed()||isFinishing())return;
+     setBusy(false);
+     status.setText(AppLanguage.text("AOT ready","AOT pronto"));
+     startActivityForResult(new Intent(this,BionicGameActivity.class)
+         .putExtra("game_dir",path).putExtra("aot_token",token),GAME_REQUEST);
+    });
+   }catch(Exception e){runOnUiThread(()->{
+    if(isDestroyed()||isFinishing())return;
+    setBusy(false);status.setText(AppLanguage.text("AOT preparation failed: ","Falha ao preparar AOT: ")+e.getMessage());
+   });}
+  },"iss-prepare-aot").start();
+ }
  private void setBusy(boolean value){busy=value;if(progress!=null)progress.setVisibility(value?android.view.View.VISIBLE:android.view.View.GONE);for(Button b:actions)b.setEnabled(!value);}
  private File saves(){return new File(getFilesDir(),"issport/user/savedata");}
  private void chooseSave(boolean importing){
@@ -152,6 +181,7 @@ public final class BionicMainActivity extends Activity {
   },"iss-save-transfer").start();
  }
  @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);
+  if(req==GAME_REQUEST){if(result==RESULT_FIRST_USER)launch();return;}
   if(BionicDriverSettings.result(this,req,result,data))return;
   if(req==FramegenSettings.IMPORT_DLL){if(result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);return;}
   if(pkg!=null&&pkg.result(req,result,data))return;
@@ -168,7 +198,7 @@ public final class BionicMainActivity extends Activity {
    try{getContentResolver().takePersistableUriPermission(uri,data.getFlags()&Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(SecurityException ignored){}
    getSharedPreferences("iss",0).edit().putString("game_dir",dir.getPath()).apply();refresh();
   }catch(Exception e){status.setText(e.toString());}}
- @Override public void onBackPressed(){if(busy){status.setText(AppLanguage.text("Wait for the operation to finish.", "Aguarde a operação terminar."));return;}super.onBackPressed();}
+ @Override public void onBackPressed(){if(busy)return;super.onBackPressed();}
  @Override public void onRequestPermissionsResult(int req,String[] perms,int[] results){
   super.onRequestPermissionsResult(req,perms,results);if(req!=1)return;requestingAccess=false;
   if(access()){continueSetup();return;}
