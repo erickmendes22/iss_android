@@ -115,6 +115,11 @@ enum class MemoryType {Sparse,HostCached};
 struct Buffer {VAddr cpu_addr=0x10000000;u64 size_bytes=0x80000;};
 struct Ranges {
     std::vector<std::pair<VAddr,VAddr>> intervals;
+    bool Intersects(VAddr start, u64 size) const {
+        return std::any_of(intervals.begin(), intervals.end(), [&](const auto& r) {
+            return r.first < start + size && start < r.second;
+        });
+    }
     void Normalize(){
         std::sort(intervals.begin(),intervals.end());
         std::vector<std::pair<VAddr,VAddr>> merged;

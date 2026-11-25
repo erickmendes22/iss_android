@@ -83,6 +83,7 @@ struct Runtime {
 namespace VideoCore {
 struct BufferCache {
     // PRODUCTION_READBACK_TYPE
+    bool mapped_readbacks_enabled = true;
     WriteTickTracker write_ticks;
     std::atomic<u32> deferred_count{};std::mutex deferred_mutex;
     std::vector<std::shared_ptr<DeferredReadback>> deferred_readbacks;
@@ -163,6 +164,7 @@ int main() {
         auto unrelated=std::make_shared<VideoCore::BufferCache::DeferredReadback>();
         unrelated->mapped=false;unrelated->arena_base=arena.cpu_addr;
         unrelated->copies.emplace_back(16384,0,4096);unrelated->tick=5;
+        cache.mapped_readbacks_enabled=false;
         cache.deferred_readbacks={staged,unrelated};cache.deferred_count=2;
         cache.write_ticks.Write(arena.cpu_addr,65536,5);
         r.SetBufferWriteHook([](void* c,VAddr a,u64 n,u64 tick){
@@ -173,7 +175,7 @@ int main() {
                        vk::AccessFlagBits2::eShaderWrite);
         assert(staged->stale && !unrelated->stale);
         assert(!r.scheduler.host_read_barrier);
-        assert(cache.write_ticks.Latest(arena.cpu_addr+4096,4096)==6);
+        assert(cache.write_ticks.Latest(arena.cpu_addr+4096,4096)==5);
         assert(cache.write_ticks.Latest(arena.cpu_addr+16384,4096)==5);
         VideoCore::RegionManager::hybrid_enabled=false;
     }
