@@ -1230,7 +1230,9 @@ bool BufferCache::MappedReadbackPolicy() {
 }
 
 void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
-    if (!write_ticks.Write(address, size, tick)) return;
+    // Staged snapshots only need notifications while a copy is pending.
+    // The per-page tick tree is queried exclusively by the mapped path.
+    if (mapped_readbacks_enabled && !write_ticks.Write(address, size, tick)) return;
     // Unlike a staging copy, a mapped read has not taken its snapshot yet. Uploads
     // and tiling as well as shader writes must invalidate it before device execution.
     if (!deferred_count.load(std::memory_order_acquire)) return;
@@ -1409,7 +1411,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
     const bool prioritize_request = mapped_readbacks_enabled &&
         EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
         !EmulatorSettings.IsDirectMemoryAccessEnabled();
-    if (prioritize_request && !memory_tracker->IsRegionGpuModified(device_addr, size)) {
+    if ((prioritize_request || RegionManager::HybridReadProtectionEnabled()) && !memory_tracker->IsRegionGpuModified(device_addr, size)) {
         // Another completion cleared this request while it was queued. Starting a
         // neighbor's prefetch here can introduce an entirely unrelated GPU wait.
         if (ReadbackStatsEnabled()) Readbacks().mapped_coherent_skipped.fetch_add(1);
@@ -1422,8 +1424,9 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         // Another guest thread is already waiting for this memory: wait for the same copy.
         std::scoped_lock lock{deferred_mutex};
         for (const auto& readback : deferred_readbacks) {
-            const VAddr join_start = readback->mapped ? device_addr : window_start;
-            const VAddr join_end = readback->mapped ? device_addr + size : window_end;
+            const bool join_request = readback->mapped || RegionManager::HybridReadProtectionEnabled();
+            const VAddr join_start = join_request ? device_addr : window_start;
+            const VAddr join_end = join_request ? device_addr + size : window_end;
             if (!readback->Done() && !readback->stale && readback->start <= join_start &&
                 join_end <= readback->end) {
                 // A staging envelope covers 512 KiB, but not necessarily each

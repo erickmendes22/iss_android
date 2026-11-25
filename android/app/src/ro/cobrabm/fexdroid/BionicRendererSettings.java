@@ -17,20 +17,11 @@ final class BionicRendererSettings {
   final boolean hybrid = p.getBoolean("renderer_experimental_hybrid_readback",false)
       || p.getBoolean("fix_smoke_powers_precise_readback",false);
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
-  // Opt-in V6 experiment; when disabled this is exactly the confirmed V2 path.
-  env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",true) ? "1" : "0");
   env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",true) ? "1" : "0");
-  // V2: use staged GPU->CPU copies for visibility instead of reading sparse
-  // residency directly; prefetch recurring fault pages at fences to overlap waits.
-  // Apply these parameters only to Hybrid; plain Relaxed is unchanged.
-  if (hybrid) {
-   env.put("TLG_MAPPED_READBACK","0");
-   env.put("TLG_EAGER_READBACK","1");
-  } else {
-   env.put("TLG_MAPPED_READBACK","1");
-   env.put("TLG_EAGER_READBACK","0");
-  }
+  // Hybrid publishes only GPU-dirty spans. The eager fence path writes whole pages.
+  env.put("TLG_MAPPED_READBACK", hybrid ? "0" : "1");
+  env.put("TLG_EAGER_READBACK","0");
 
   env.put("TLG_DYNAMIC_STRIDE",p.getBoolean("renderer_dynamic_stride",true)?"1":"0");
   env.put("TLG_OCCLUSION_MODE",p.getBoolean("renderer_real_occlusion",true)?"4":"3");

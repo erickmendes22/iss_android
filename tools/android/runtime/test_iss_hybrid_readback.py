@@ -27,26 +27,11 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn("BionicReadbackSettings.show(", main)
         self.assertIn("BionicReadbackSettings.show(", player)
 
-    def test_hybrid_v6_optimized_eager_backoff_is_optional(self):
+    def test_hybrid_publishes_dirty_spans_without_eager_whole_page_copies(self):
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
-        dialog = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
-        core = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
-        self.assertIn('env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",true) ? "1" : "0");', settings)
-        self.assertIn('static final String BACKOFF_KEY = "renderer_hybrid_eager_backoff";', dialog)
-        self.assertIn('.putBoolean(BACKOFF_KEY,optimized.isChecked())',dialog)
-        self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',dialog)
-        self.assertIn('constexpr u8 EagerHybridMaxBackoff = 63;', core)
-        self.assertIn('RegionManager::HybridReadProtectionEnabled() && opt && opt[0] == \'1\'', core)
-        self.assertNotIn('FinishDeferredReadback(*rb, false);', core)
-
-    def test_hybrid_v2_staging_and_eager_are_opt_in(self):
-        settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
-        cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
-        self.assertIn('env.put("TLG_MAPPED_READBACK","0");',settings)
-        self.assertIn('env.put("TLG_EAGER_READBACK","1");',settings)
-        self.assertIn('env.put("TLG_MAPPED_READBACK","1");',settings)
-        self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
-        self.assertIn('ISS hybrid V6 (V2 baseline):',cache)
+        self.assertIn('env.put("TLG_EAGER_READBACK","0");', settings)
+        self.assertNotIn('env.put("TLG_EAGER_READBACK","1");', settings)
+        self.assertIn('env.put("TLG_MAPPED_READBACK", hybrid ? "0" : "1");', settings)
 
     def test_staged_gpu_writes_must_invalidate_old_copies(self):
         cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()

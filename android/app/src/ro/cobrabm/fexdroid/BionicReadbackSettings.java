@@ -14,7 +14,6 @@ import android.widget.TextView;
 final class BionicReadbackSettings {
  static final String KEY = "fix_smoke_powers_precise_readback";
  static final String HYBRID_KEY = "renderer_experimental_hybrid_readback";
- static final String BACKOFF_KEY = "renderer_hybrid_eager_backoff";
  static final String TARGETED_KEY = "renderer_hybrid_targeted_staging";
 
  static int mode(SharedPreferences preferences) {
@@ -58,26 +57,17 @@ final class BionicReadbackSettings {
   choices.check(ids[mode(preferences)]);
   body.addView(choices);
 
-  CheckBox optimized = new CheckBox(activity);
-  optimized.setText(AppLanguage.text(
-      "Experimental: reduce unused GPU fence copies (backoff 63 instead of 7)",
-      "Experimental: reduzir cópias GPU não utilizadas (backoff 63 em vez de 7)"));
-  optimized.setChecked(preferences.getBoolean(BACKOFF_KEY,true));
-  optimized.setPadding(0,pad/2,0,pad/2);
-  body.addView(optimized);
   CheckBox targeted = new CheckBox(activity);
   targeted.setText(AppLanguage.text(
-      "Performance experiment: demand-driven staged readbacks",
-      "Teste de desempenho: readbacks seletivos por páginas solicitadas"));
+      "Limit prefetch to recently requested pages",
+      "Limitar a antecipação às páginas solicitadas recentemente"));
   targeted.setChecked(preferences.getBoolean(TARGETED_KEY,true));
   targeted.setPadding(0,pad/2,0,pad/2);
   body.addView(targeted);
   int initialVisibility=choices.getCheckedRadioButtonId()==ids[1] ? View.VISIBLE : View.GONE;
-  optimized.setVisibility(initialVisibility);
   targeted.setVisibility(initialVisibility);
   choices.setOnCheckedChangeListener((group,selectedId)->{
       int visibility=selectedId==ids[1] ? View.VISIBLE : View.GONE;
-      optimized.setVisibility(visibility);
       targeted.setVisibility(visibility);
   });
 
@@ -98,7 +88,6 @@ final class BionicReadbackSettings {
     int choice = selected == ids[1] ? 1 : 0;
     preferences.edit().putBoolean(KEY,false)
      .putBoolean(HYBRID_KEY,choice==1)
-     .putBoolean(BACKOFF_KEY,optimized.isChecked())
      .putBoolean(TARGETED_KEY,targeted.isChecked()).apply();
     if (refreshed!=null) refreshed.run();
    }).show();

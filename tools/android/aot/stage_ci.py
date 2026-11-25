@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory() as tmp:
     shutil.copy2('tools/android/bionic/run-bionic.sh',port)
     manifest = stage/'runtime-manifest.json'
     meta = json.loads(manifest.read_text())
-    meta.update(application_id='com.daedalus.iss.aot.local',version='0.2-aot.3',runtime_backend='android-bionic-arm64-aot',tso=False)
+    meta.update(application_id='com.daedalus.iss.aot.local',version='0.2-aot.4',runtime_backend='android-bionic-arm64-aot',tso=False)
     manifest.write_text(json.dumps(meta,indent=2))
     archive = assets/'runtime.tar.gz'
     with tarfile.open(archive,'w:gz',compresslevel=5) as tar:
