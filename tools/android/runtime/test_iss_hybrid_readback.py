@@ -31,7 +31,7 @@ class HybridReadbackTest(unittest.TestCase):
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         dialog = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
         core = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
-        self.assertIn('env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");', settings)
+        self.assertIn('env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",true) ? "1" : "0");', settings)
         self.assertIn('static final String BACKOFF_KEY = "renderer_hybrid_eager_backoff";', dialog)
         self.assertIn('.putBoolean(BACKOFF_KEY,optimized.isChecked())',dialog)
         self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',dialog)
@@ -59,14 +59,15 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('bool buffer_write_needs_host_barrier = true;',header)
         self.assertIn('if (buffer_write_needs_host_barrier)',runtime)
 
-    def test_targeted_staging_is_opt_in_and_does_not_join_uncopied_pages(self):
+    def test_targeted_staging_is_hybrid_only_and_does_not_join_uncopied_pages(self):
         src = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         ui = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
         self.assertIn('TLG_ISS_HYBRID_TARGETED_STAGE',src)
         self.assertIn('hybrid_staging_hot_pages.ForEachSelected(',src)
         self.assertIn('readback->CopiesTouchPages(device_addr, device_addr + size)',src)
-        self.assertIn('renderer_hybrid_targeted_staging',settings)
+        self.assertIn('hybrid && p.getBoolean("renderer_hybrid_targeted_staging",true)',settings)
+        self.assertIn('preferences.getBoolean(TARGETED_KEY,true)',ui)
         self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',ui)
 
     def test_precise_label_uses_hybrid_backend_without_readbacks_2(self):
