@@ -115,7 +115,7 @@ def patch_fs_loads(image, ph, base):
     return patched
 
 
-def link(game, out, module_names=DEFAULT_MODULES):
+def link(game, out, module_names=DEFAULT_MODULES, *, native_aot=False):
     main = module(game / 'eboot.bin')
     raw = (out / 'boot.bin').read_bytes()
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', raw, 0)
@@ -146,7 +146,7 @@ def link(game, out, module_names=DEFAULT_MODULES):
     exports, by_nid = {}, collections.defaultdict(list)
     table = []
     base = (size + 65535) & ~65535
-    fs_patched = patch_fs_loads(image, main['ph'], 0)
+    fs_patched = 0 if native_aot else patch_fs_loads(image, main['ph'], 0)
     tls_module = 2
     for filename in module_names:
         m = module(game / 'sce_module' / filename)
@@ -210,7 +210,8 @@ def link(game, out, module_names=DEFAULT_MODULES):
                 exports[s['identity']] = entry_value
                 by_nid[(s['identity'][0], s['identity'][1][0])].append(entry_value)
                 count += 1
-        fs_patched += patch_fs_loads(image, m['ph'], base)
+        if not native_aot:
+            fs_patched += patch_fs_loads(image, m['ph'], base)
         table.append(dict(file=filename, base=base, size=modsize, init=base + m['tags'].get(12, 0),
                           tls_address=base + tls['vaddr'] if tls else 0, tls_memsz=tls['memsz'] if tls else 0,
                           tls_filesz=tls['filesz'] if tls else 0, tls_module=module_id,
@@ -240,7 +241,8 @@ def link(game, out, module_names=DEFAULT_MODULES):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
     with (out / 'boot-linked.bin').open('wb') as f:
-        f.write(struct.pack('<8s6Q', b'G3PROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
+        magic = b'BBPROBE5' if native_aot else b'G3PROBE5'
+        f.write(struct.pack('<8s6Q', magic, len(image), entry, len(segments), len(relocs), len(names), flags))
         f.write(struct.pack('<Q', procparam['vaddr']))
         f.write(struct.pack('<4Q', *main_tls_values))
         f.write(struct.pack('<Q', len(table)))
