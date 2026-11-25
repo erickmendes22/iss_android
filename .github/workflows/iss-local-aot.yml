@@ -57,14 +57,49 @@ jobs:
           ISS_AOT_UPSTREAM="$PWD/out/bb-source" bash tools/android/aot/build_native_cpu.sh
           bash tools/android/bionic/build_native_runtime.sh
           "$ISS_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded out/bionic/lib/*.so out/bionic/bin/iss-probe
-      - name: Assemble upgrade for AOT Local and encrypt private delivery
-        env:
-          ISS_AOT_KEYSTORE_B64: ${{ secrets.ISS_AOT_KEYSTORE_B64 }}
-          ISS_AOT_KEY_PASSWORD: ${{ secrets.ISS_AOT_KEY_PASSWORD }}
+      - name: Assemble APK from current sources and prepare signing request
         run: |
           set -euo pipefail
           python3 tools/android/aot/stage_ci.py inputs/iss/*.apk inputs/shadow/*.apk
           bash tools/android/aot/assemble_ci.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iss-aot-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/aot-apk/request.cms
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign and verify the update for the installed application
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISS_AOT_KEYSTORE_B64: ${{ secrets.ISS_AOT_KEYSTORE_B64 }}
+          ISS_AOT_KEY_PASSWORD: ${{ secrets.ISS_AOT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bt="$ANDROID_HOME/build-tools/35.0.0"
+          cd out/aot-apk
+          if [[ -n "$ISS_AOT_KEYSTORE_B64" ]]; then
+            umask 077
+            key=$(mktemp)
+            trap 'rm -f "$key"' EXIT
+            printf '%s' "$ISS_AOT_KEYSTORE_B64" | base64 -d >"$key"
+            "$bt/apksigner" sign --ks "$key" --ks-key-alias aot-local --ks-pass env:ISS_AOT_KEY_PASSWORD --v1-signing-enabled false --alignment-preserved true --out update.apk request.apk
+          else
+            path="signatures/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+            for attempt in $(seq 1 160); do
+              if gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=ci/iss-aot-signatures" --jq .content >response.b64 2>/dev/null; then
+                base64 -d response.b64 >response.json
+                break
+              fi
+              sleep 15
+            done
+            python3 ../../tools/android/aot/detached_signing.py attach request.apk response.json update.apk
+          fi
+          "$bt/apksigner" verify --verbose --print-certs update.apk >signers.txt
+          grep -F 'certificate SHA-256 digest: a787209296559bd6ffe0d0790368b53cb64050f73e51d211d5bcb80b6b36f0b3' signers.txt
+          "$bt/aapt" dump badging update.apk >badging.txt
+          grep -F "package: name='com.daedalus.iss.aot.local'" badging.txt
+          openssl cms -encrypt -binary -aes256 -outform DER -in update.apk -out delivery.cms ../../tools/android/aot/delivery-cert.pem
+          sha256sum update.apk
       - uses: actions/upload-artifact@v4
         with:
           name: iss-aot-private-${{ github.run_id }}
