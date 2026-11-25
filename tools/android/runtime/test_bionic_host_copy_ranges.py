@@ -71,6 +71,8 @@ int main() {
 #include <functional>
 #include <thread>
 #include "iss_bionic_perf.h"
+#include "video_core/renderer_vulkan/tlou_host_copy_wait.h"
+namespace Detail = Vulkan::Detail;
 #include "video_core/renderer_vulkan/host_copy_sources.h"
 using u64=uint64_t;using namespace std::chrono_literals;
 namespace TlgStats {

@@ -14,6 +14,7 @@
 #include "tlg_copy.h"
 #include "iss_bionic_perf.h"
 #include "iss_session.h"
+#include "video_core/renderer_vulkan/tlou_host_copy_wait.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
@@ -466,9 +467,7 @@ void Scheduler::WaitHostCopies() {
         TlgStats::WaitTimer timer{TlgStats::host_copies_wait_ns};
         TlgStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
         KickRecording(true);
-        while (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
-            std::this_thread::yield();
-        }
+        Detail::WaitForHostCopySequence(host_copies_done, host_copies_issued);
     }
     TlgStats::WaitTimer timer{TlgStats::copy_threads_wait_ns};
     TlgCopy::WaitAsync();

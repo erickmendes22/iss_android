@@ -943,6 +943,7 @@ public:
             AfterRecordingPrefix(lane, [copy = std::move(copy), this, seq] {
                 copy();
                 host_copies_done.store(seq, std::memory_order_release);
+                host_copies_done.notify_all();
             });
         });
     }

@@ -133,7 +133,8 @@ def main():
 
     run_step("prepare", game, "--out", out)
     # link_modules uses boot.bin directly; link_libc is not a prerequisite.
-    run_step("link_modules", game, "--out", out)
+    native_aot = bionic and (root / "aot/profile.json").is_file()
+    run_step("link_modules", game, "--out", out, *(["--native-runtime"] if native_aot else []))
     run_step("content_profile", game, "--out", out, "--sku", "full")
     run_step("patches", "--out", out, "--extra", env.get("ISS_PATCHES", ""),
              "--game-dir", game, "--patches-dir", data / "patches",
@@ -145,11 +146,16 @@ def main():
         if not (out / artifact).is_file():
             raise SystemExit(f"ISS preparation: missing {artifact}")
 
+    if native_aot:
+        from iss_android_aot import select
+        env["BB_AOT"] = str(select(game, out, root))
+        env["BB_AOT_MISS_LOG"] = str(out / "aot-misses.log")
     args = ([str(probe)] if bionic else [str(loader), str(probe)]) + [
             str(image), "--content-profile", str(out / "content.bin"),
             "--patches", str(out / "patches.bin"),
             "--app0", str(game), "--user", str(user), "--timeout", "0"]
-    print("ISS preparation complete; entering ARM64 FEX game loader" +
+    engine = "native ARM64 AOT (no TSO)" if native_aot else "FEX"
+    print("ISS preparation complete; entering " + engine + " game loader" +
           (" (Android Bionic)" if bionic else " (Linux glibc)"), flush=True)
     sys.stdout.flush()
     sys.stderr.flush()

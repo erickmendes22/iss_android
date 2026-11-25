@@ -1105,9 +1105,14 @@ void BufferCache::EagerCopyAtFence() {
                 flush_copies();
                 arena = page_arena;
             }
-            copies.push_back(vk::BufferCopy{.srcOffset = it->first - arena->cpu_addr,
-                                            .dstOffset = page.offset,
-                                            .size = EagerPageSize});
+            const u64 src = it->first - arena->cpu_addr;
+            if (!copies.empty() && copies.back().srcOffset + copies.back().size == src &&
+                copies.back().dstOffset + copies.back().size == page.offset) {
+                copies.back().size += EagerPageSize;
+            } else {
+                copies.push_back(vk::BufferCopy{.srcOffset = src, .dstOffset = page.offset,
+                                                .size = EagerPageSize});
+            }
             copied.push_back(&page);
         }
         ++it;
@@ -1423,7 +1428,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                 join_end <= readback->end) {
                 // A staging envelope covers 512 KiB, but not necessarily each
                 // page inside it. Never return an unrelated incomplete snapshot.
-                if (targeted_stage && !readback->mapped &&
+                if (!readback->mapped &&
                     !readback->CopiesTouchPages(device_addr, device_addr + size)) {
                     continue;
                 }
@@ -1500,6 +1505,10 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             selected = hybrid_staging_hot_pages.ForEachSelected(
                 window_start, window_end, device_addr, device_addr + size,
                 [&](VAddr page_start, u64 page_length) {
+                    // SotC hot-page pruning: only skip speculative neighbors. The
+                    // faulting pages always go through the full tracker and wait.
+                    if ((page_start + page_length <= required_start || page_start >= required_end) &&
+                        !gpu_modified_ranges.Intersects(page_start, page_length)) return;
                     const std::size_t first_copy = readback->copies.size();
                     const u64 dest_offset = total_size_bytes;
                     total_size_bytes +=

@@ -1,0 +1,210 @@
+--- a/guest_cpu_aot.cpp
++++ b/guest_cpu_aot.cpp
+@@ -71,6 +71,7 @@
+ 
+ // ------------------------------------------------------------------------------------------------ state ----
+ struct Thread {
++    uint64_t suspended_host_rsp = 0;
+     GuestState* s = nullptr;
+     uintptr_t stack_top = 0;        // given by guest_cpu_thread_stack, or our own allocation
+     uintptr_t own_stack = 0;
+@@ -353,6 +354,8 @@
+     const GranRec* funcs = nullptr;
+     uint64_t nfuncs = 0;
+     const uint8_t* flags = nullptr;    // bbr_func_granular[]
++    bool resumes = false;            // bbr_abi_flags bit 0: unit return switches
++    std::atomic<uint64_t> resume_hits {0};
+     std::atomic<uint64_t> entries {0}, rejected {0};
+ } G;
+ 
+@@ -377,6 +380,39 @@
+     }
+     s->_pad1 = 0;
+     G.rejected.fetch_add(1, std::memory_order_relaxed);
++    return false;
++}
++
++
++// AOT libraries built with --resume-entries already contain return-address
++// switch cases. Bloodborne's older CPU loader reported those cases but ignored
++// them, so an ordinary host-call return landed mid-unit and stopped the game.
++// The first SotC miss (+0x3bbe1) is a valid switch case of unit +0x3bbb0.
++// Reuse the ABI's _pad1=1 probe contract; never run an unrecognised address.
++bool ResumeEntry(GuestState* s, uint64_t target, Thread* t) {
++    if (!G.resumes || !G.funcs) return false;
++    const uint64_t offset = target - E.base;
++    if (offset >= E.size) return false;
++    const GranRec* end = G.funcs + G.nfuncs;
++    const GranRec* f = std::upper_bound(G.funcs, end, offset,
++        [](uint64_t v, const GranRec& r) { return v < r.start; });
++    if (f == G.funcs) return false;
++    --f;
++    if (offset >= f->end) return false;
++    // Probe only this function's units, never all ~68k units globally.
++    for (uint32_t u = f->first; u < f->first + f->count; ++u) {
++        UnitFn fn = __atomic_load_n(&E.fns[u], __ATOMIC_ACQUIRE);
++        s->rip = target;
++        s->_pad1 = 1;
++        fn(s);
++        if (s->_pad1 == 0) {
++            if (E.stats) { ++t->unit_dispatch; G.resume_hits.fetch_add(1, std::memory_order_relaxed); }
++            return true;
++        }
++    }
++    // None of the compiled switches accepted it: leave state unchanged and
++    // preserve strict AOT (no FEX/JIT and no mistaken arbitrary jump).
++    s->_pad1 = 0;
+     return false;
+ }
+ 
+@@ -564,6 +600,7 @@
+         break;
+     }
+     // An instruction boundary inside a function with granular entries (a computed jump the lifter could not resolve, a jump into the middle of a function).
++    if (ResumeEntry(s, target, t)) return;
+     if (GranularEntry(s, target, t)) return;
+     if (tail && target - E.base < E.text_end && !IsUnitEntry(target - E.base)) {
+         // A jump (not a call) into the middle of a unit, which no unit starts: the case of a switch the tool did not resolve whose target lies
+@@ -719,15 +756,22 @@
+     E.ends = static_cast<const uint64_t*>(dlsym(so, "bbr_unit_end"));
+     E.ehashes = E.ends ? static_cast<const uint64_t*>(dlsym(so, "bbr_unit_ehash")) : nullptr;
+     if (abi_flags && (*abi_flags & 2)) E.dirty_flags = static_cast<uint8_t*>(dlsym(so, "bbr_dirty"));
+-    if (abi_flags && (*abi_flags & 1))
+-        std::fprintf(stderr, "AOT: %s has resume entries (bbr_abi_flags bit 0); this runtime does not use them\n", path);
+-    if (abi_flags && (*abi_flags & 16)) {   // granular entries: bbr_func_granular[] says which functions of bbr_funcs[] have them
++    G.resumes = abi_flags && ((*abi_flags & 1) != 0);
++    if (abi_flags && (*abi_flags & (1 | 16))) {
+         G.funcs = static_cast<const GranRec*>(dlsym(so, "bbr_funcs"));
+         const auto* nf = static_cast<const uint64_t*>(dlsym(so, "bbr_func_count"));
+-        G.flags = static_cast<const uint8_t*>(dlsym(so, "bbr_func_granular"));
+         G.nfuncs = nf ? *nf : 0;
+-        if (!G.funcs || !G.flags || !G.nfuncs) { G.flags = nullptr; std::fprintf(stderr, "AOT: %s: granular entries declared but their tables are missing\n", path); }
+-    }
++        if (*abi_flags & 16) G.flags = static_cast<const uint8_t*>(dlsym(so, "bbr_func_granular"));
++        if (!G.funcs || !G.nfuncs) {
++            G.resumes = false;
++            G.flags = nullptr;
++            std::fprintf(stderr, "AOT: %s: resume/granular function table is incomplete\n", path);
++        }
++        if ((*abi_flags & 16) && !G.flags)
++            std::fprintf(stderr, "AOT: %s: granular flags absent (resume still available)\n", path);
++    }
++    if (G.resumes)
++        std::fprintf(stderr, "AOT: native ABI v2 resume-entry dispatcher enabled; compiled return switches active\n");
+     E.stats = std::getenv("BB_AOT_STATS") != nullptr;
+     E.trace = std::getenv("BB_AOT_TRACE") != nullptr;
+     if (!BuildTable()) { std::fprintf(stderr, "AOT: cannot build the dispatch table\n"); return; }
+@@ -774,7 +818,7 @@
+     if (!fn) {
+         // (a granular function's instruction boundary: run from here, nested like the unit case)
+         ++t->unwound_depth;
+-        const bool ran = GranularEntry(s, s->rip, t);
++        const bool ran = ResumeEntry(s, s->rip, t) || GranularEntry(s, s->rip, t);
+         --t->unwound_depth;
+         if (ran) unwound_runs.fetch_add(1, std::memory_order_relaxed);
+         return;
+@@ -989,7 +1033,7 @@
+         UnitFn unit = offset < E.size ? Lookup(offset) : nullptr;
+         if (unit) unit(&s);
+         else if (void* host = StubFunction(rip)) HostCall(&s, host, t);
+-        else if (GranularEntry(&s, rip, t)) {}
++        else if (ResumeEntry(&s, rip, t) || GranularEntry(&s, rip, t)) {}
+         else NoteMiss(&s, rip, t, MissKind::Unwind);
+     }
+     --t->depth;
+@@ -1137,3 +1181,95 @@
+ uint64_t guest_cpu_tsc(void) { return bbnative::Tsc(); }
+ uint64_t guest_cpu_tsc_frequency(void) { return bbnative::TscFrequency(); }
+ }  // extern "C"
++
++#include <array>
++#include "aarch64_store.h"
++BBR_EXPORT void* guest_cpu_context_current() { return Current(); }
++
++BBR_EXPORT void* guest_cpu_context_create(void* top, size_t) {
++    Thread* parent = Current();
++    self = nullptr;
++    Thread* fiber = Current();
++    *fiber->s = *parent->s;
++    for (unsigned i = 0; i < 2; ++i) {
++        if (parent->s->segment_arrays[i] == parent->s->private_gdt)
++            fiber->s->segment_arrays[i] = fiber->s->private_gdt;
++    }
++    fiber->s->callret_sp = 0;
++    fiber->stack_top = reinterpret_cast<uintptr_t>(top) & ~uintptr_t(15);
++    self = parent;
++    return fiber;
++}
++
++BBR_EXPORT void guest_cpu_context_use(void* context) {
++    if (self) self->suspended_host_rsp = GuestRspAtHostCall();
++    self = static_cast<Thread*>(context);
++    NoteGuestRsp(self ? self->suspended_host_rsp : 0);
++}
++
++BBR_EXPORT void guest_cpu_context_destroy(void* context) {
++    if (!context) return;
++    Thread* previous = self;
++    self = static_cast<Thread*>(context);
++    guest_cpu_thread_end();
++    self = previous == context ? nullptr : previous;
++    if (!self) NoteGuestRsp(0);
++}
++
++BBR_EXPORT void guest_cpu_get_fp_control(uint32_t* mxcsr, uint16_t* fcw) {
++    const GuestState& state = *Current()->s;
++    *mxcsr = state.mxcsr;
++    *fcw = state.FCW;
++}
++
++BBR_EXPORT void guest_cpu_set_fp_control(uint32_t mxcsr, uint16_t fcw) {
++    GuestState& state = *Current()->s;
++    state.mxcsr = mxcsr;
++    state.FCW = fcw;
++}
++
++namespace {
++struct FpsimdRecord {
++    uint32_t magic, size;
++    uint32_t fpsr, fpcr;
++    __uint128_t v[32];
++};
++constexpr uint32_t FpsimdMagic = 0x46508001;
++FpsimdRecord* Fpsimd(ucontext_t* uc) {
++    auto* at = reinterpret_cast<unsigned char*>(uc->uc_mcontext.__reserved);
++    auto* end = at + sizeof(uc->uc_mcontext.__reserved);
++    while (at + 8 <= end) {
++        uint32_t magic, size;
++        std::memcpy(&magic, at, 4);
++        std::memcpy(&size, at + 4, 4);
++        if (!magic || size < 8 || size > static_cast<size_t>(end - at) || (size & 15)) break;
++        if (magic == FpsimdMagic) {
++            return size >= sizeof(FpsimdRecord) ? reinterpret_cast<FpsimdRecord*>(at) : nullptr;
++        }
++        at += size;
++    }
++    return nullptr;
++}
++
++}
++using GuestStoreWriter = int (*)(uintptr_t,const void*,size_t,void*);
++BBR_EXPORT int guest_cpu_try_store_fault(void* ucontext, uintptr_t fault, GuestStoreWriter writer, void* opaque) {
++    if (!self || !writer) return 0;
++    auto* uc = static_cast<ucontext_t*>(ucontext);
++    auto& m = uc->uc_mcontext;
++    if (!E.on || m.pc < E.so_lo || m.pc >= E.so_hi) return 0;
++    uint32_t instruction;
++    std::memcpy(&instruction, reinterpret_cast<const void*>(m.pc), sizeof(instruction));
++    const auto store = IssCpu::DecodeVectorStore(instruction,
++                            reinterpret_cast<const uint64_t*>(m.regs), m.sp, fault);
++    if (!store) return 0;
++    const auto* fp = Fpsimd(uc);
++    if (!fp) return 0;
++    std::array<unsigned char, 16> bytes;
++    std::memcpy(bytes.data(), &fp->v[store->vector], bytes.size());
++    if (!writer(store->address, bytes.data(), bytes.size(), opaque)) return 0;
++    // STR Q has no flags, GPR or base writeback. Resume after it; resume the native unit.
++    m.pc += 4;
++    return 1;
++}
++
