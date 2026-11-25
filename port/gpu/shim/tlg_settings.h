@@ -76,6 +76,7 @@ struct Values {
     // Graphics (tlg_graphics.h). Live: applied on the next frame.
     std::atomic<int> display_mode{0};
     std::atomic<bool> vsync{true};
+    std::atomic<bool> auto_quality{false};
     std::atomic<int> fps_limit{0};
     std::atomic<int> android_vblank_hz{60};
     /// Off by default (2026-10-16): a draw whose pipeline was still compiling was skipped, and the

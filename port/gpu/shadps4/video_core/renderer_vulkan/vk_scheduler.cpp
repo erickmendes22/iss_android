@@ -13,6 +13,7 @@
 
 #include "tlg_copy.h"
 #include "iss_bionic_perf.h"
+#include "iss_session.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
@@ -30,6 +31,24 @@ std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+#ifdef ISS_ANDROID_BIONIC
+    if (threaded_recording) { // the draw scheduler; excludes presentation and generated frames
+        const auto physical = instance.GetPhysicalDevice();
+        const auto families = physical.getQueueFamilyProperties();
+        const u32 bits = families[instance.GetGraphicsQueueFamilyIndex()].timestampValidBits;
+        if (bits) {
+            const vk::QueryPoolCreateInfo info{.queryType = vk::QueryType::eTimestamp,
+                                               .queryCount = 2 * SessionQueryPairs};
+            auto [result, pool] = instance.GetDevice().createQueryPoolUnique(info);
+            if (result == vk::Result::eSuccess) {
+                session_queries = std::move(pool);
+                timestamp_mask = ~u64{0} >> (64 - bits);
+                timestamp_ns = physical.getProperties().limits.timestampPeriod;
+                IssSession::gpu_timing.store(true);
+            }
+        }
+    }
+#endif
     // Experimental real Vulkan secondary command recording on ARM64 only.
     // Requires RenderState formats/1x MSAA and no rendering observer (Vulkan
     // inherited occlusion queries require additional feature support).
@@ -88,6 +107,9 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
 }
 
 Scheduler::~Scheduler() {
+#ifdef ISS_ANDROID_BIONIC
+    if (session_queries) work_semaphore.Wait(CurrentTick() - 1);
+#endif
     if (parallel_recording) {
         SyncRecording();
         parallel_recording.reset();
@@ -710,6 +732,29 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     current_cmdbuf = command_pool.Commit();
     Check(current_cmdbuf.begin(begin_info));
 
+#ifdef ISS_ANDROID_BIONIC
+    if (session_queries) {
+        const u64 tick = CurrentTick();
+        const u32 index = 2 * (tick % SessionQueryPairs);
+        if (tick > SessionQueryPairs) {
+            // The existing submission limit guarantees this pair has retired.
+            u64 stamps[2]{};
+            const auto result = instance.GetDevice().getQueryPoolResults(*session_queries,
+                index, 2, sizeof(stamps), stamps, sizeof(u64), vk::QueryResultFlagBits::e64);
+            if (result == vk::Result::eSuccess) {
+                u64 duration = (stamps[1] - stamps[0]) & timestamp_mask;
+                if (have_previous_end)
+                    duration = std::min(duration, (stamps[1] - previous_end) & timestamp_mask);
+                previous_end = stamps[1];
+                have_previous_end = true;
+                IssSession::gpu_busy_ns.fetch_add(static_cast<u64>(duration * timestamp_ns),
+                                                  std::memory_order_relaxed);
+            }
+        }
+        current_cmdbuf.resetQueryPool(*session_queries, index, 2);
+        current_cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, *session_queries, index);
+    }
+#endif
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
     vertex_input_state.Invalidate();
@@ -761,6 +806,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
     FlushHostReadBarrier();
+#ifdef ISS_ANDROID_BIONIC
+    if (session_queries)
+        current_cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands, *session_queries,
+                                       2 * (signal_value % SessionQueryPairs) + 1);
+#endif
     const auto command_buffers = EndRecordingBuffers();
 
     const vk::Semaphore timeline = work_semaphore.Handle();

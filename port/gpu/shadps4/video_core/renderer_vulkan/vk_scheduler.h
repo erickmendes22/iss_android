@@ -1075,6 +1075,13 @@ private:
 private:
     const Instance& instance;
     Semaphore work_semaphore;
+#ifdef ISS_ANDROID_BIONIC
+    static constexpr u32 SessionQueryPairs = 16; // more than the eight in-flight submissions
+    vk::UniqueQueryPool session_queries;
+    u64 timestamp_mask{}, previous_end{};
+    double timestamp_ns{};
+    bool have_previous_end{};
+#endif
     CommandPool command_pool;
     std::unique_ptr<CommandPool> parallel_pool;
     struct NativeSecondaryScope {

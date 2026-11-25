@@ -394,6 +394,13 @@ extern "C" void tlggpu_note_open(const char* guest_path) {
     TlgRegion::NoteOpen(guest_path);
 }
 
+#ifdef ISS_ANDROID_BIONIC
+#include "iss_session.h"
+extern "C" void tlggpu_iss_quality_attach(int32_t* level) {
+    IssSession::guest_level.store(level, std::memory_order_release);
+}
+#endif
+
 extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
     out->submitted = TlgFreeze::flips_submitted.load(std::memory_order_relaxed);
     out->shown = TlgFreeze::flips_shown.load(std::memory_order_relaxed);

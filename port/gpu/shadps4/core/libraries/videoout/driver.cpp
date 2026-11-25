@@ -20,6 +20,7 @@
 #include "tlg_freeze.h"
 #include "tlg_settings.h"
 #include "iss_frame_pacing.h"
+#include "iss_session.h"
 #include "tlg_graphics.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_frame_record.h"
@@ -305,6 +306,15 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
+#ifdef ISS_ANDROID_BIONIC
+    static IssSession::Window session;
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const auto& settings = TlgSettings::Get();
+    const int limit = settings.fps_limit.load();
+    session.Flip(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(),
+                 TlgStats::draws.load(std::memory_order_relaxed),
+                 settings.auto_quality.load() ? limit : 0, limit);
+#endif
     // Update HDR status before presenting, then present the frame (tlg: on the swap thread).
     TlgFreeze::flips_shown.fetch_add(1, std::memory_order_relaxed);
     RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {

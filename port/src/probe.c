@@ -1735,6 +1735,24 @@ int main(int argc, char **argv) {
         fflush(NULL);
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
+#ifdef __ANDROID__
+    /* HayatoG/iss_pc #725: validate the 1.07 quality table and decrement site.
+     * Only the aligned level word is shared with VideoOut; no guest code hooks. */
+    int32_t *iss_quality_level = NULL;
+    const uint64_t level_offset = 0xf39978u;
+    char quality_sfo[4096], quality_title[32] = "";
+    snprintf(quality_sfo, sizeof(quality_sfo), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(quality_sfo, "TITLE_ID", quality_title, sizeof(quality_title), NULL);
+    const unsigned char lower[] = {0x41,0x8d,0x50,0xff,0x41,0x89,0x95,0xa8,0xdc,0x01,0};
+    if (gpu_enabled && (!strcmp(quality_title,"CUSA00223") || !strcmp(quality_title,"CUSA00004") ||
+                        !strcmp(quality_title,"CUSA00263")) &&
+        size >= level_offset + sizeof(int32_t) && tlg_view_signature_match(image, size) &&
+        !memcmp(image + 0x1f1b68, lower, sizeof(lower))) {
+        for (uint64_t i = 0; i < ns; ++i)
+            if ((segments[i].flags & 2) && mapped(&segments[i], 1, level_offset, sizeof(int32_t)))
+                iss_quality_level = (int32_t*)(image + level_offset);
+    }
+#endif
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     install_infamous_menu_watch(app0,segments,ns,size);
     if (gpu_enabled) install_iss_camera_capture(app0, segments, ns, size);
@@ -1783,6 +1801,10 @@ int main(int argc, char **argv) {
         if ((segments[i].flags & 1) && entry >= segments[i].address && entry - segments[i].address < segments[i].size)
             executable_entry = 1;
     }
+#ifdef __ANDROID__
+    extern void tlggpu_iss_quality_attach(int32_t*);
+    tlggpu_iss_quality_attach(iss_quality_level);
+#endif
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     boot_step("image mapped and relocated");

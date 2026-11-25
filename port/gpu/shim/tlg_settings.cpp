@@ -228,7 +228,7 @@ void PollAndroidPerformance() {
         auto& v=Get();
         if(v.fps_limit!=state.fps || v.vsync!=state.vsync)
             std::printf("Android performance: limit=%d FPS, vsync=%d\n",state.fps,int(state.vsync));
-        v.fps_limit=state.fps;v.vsync=state.vsync;
+        v.fps_limit=state.fps;v.vsync=state.vsync;v.auto_quality=state.auto_quality;
     }
 #endif
 }
