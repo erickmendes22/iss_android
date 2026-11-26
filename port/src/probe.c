@@ -689,7 +689,7 @@ static void install_iss_camera_capture(const char *app0, Segment *segments,
     }
     if (!guest_cpu_hook((uintptr_t)(image + ISS_CAMERA_HOOK), sizeof(original),
                         iss_camera_updated)) {
-        puts("FSR3 ISS camera: FEX hook unavailable");
+        puts("FSR3 ISS camera: guest hook unavailable");
         return;
     }
     puts("FSR3 ISS camera: verified guest update capture active (post-matrix, 4x4)");

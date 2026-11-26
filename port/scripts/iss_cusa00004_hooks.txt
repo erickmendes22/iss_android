@@ -1,0 +1,5 @@
+# Verified by the runtime against the original camera and AA functions.
+hook 0x582514 3 regs resume=0x582517
+hook 0x472944 9 regs resume=0x4729e0
+hook 0x192c4c 13 regs resume=0x192c59,0x192cff
+hook 0x192cff 7 regs resume=0x192d06

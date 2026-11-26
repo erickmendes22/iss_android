@@ -1480,16 +1480,21 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
     const VAddr prefetch_start = std::max<VAddr>(Common::AlignDown(device_addr, u64{65536}), arena->cpu_addr);
     const VAddr prefetch_end = std::min<VAddr>(std::max<VAddr>(prefetch_start + 65536, required_end),
                                               arena->cpu_addr + arena->size_bytes);
-    for (unsigned attempt = 0; attempt < (try_mapped ? 3u : 1u); ++attempt) {
-        const bool mapped_attempt = try_mapped && attempt < 2;
-        if (mapped_attempt && attempt == 1 && required_start == prefetch_start &&
-            required_end == prefetch_end) continue;
-        // Match the release's 64 KiB mapped prefetch. An unrelated current-tick
-        // write elsewhere in the 512 KiB staging window must not disqualify it.
-        // If the prefetch is ineligible, retry only the requested pages (also in
-        // core025), preserving every dirty island in each page before unprotecting it.
-        const VAddr start = !mapped_attempt ? window_start : attempt ? required_start : prefetch_start;
-        const VAddr end = !mapped_attempt ? window_end : attempt ? required_end : prefetch_end;
+    // Publish scattered records together only when the requested producer has
+    // already completed. Never make a fault wait for speculative neighbors.
+    const bool wide_ready = RegionManager::HybridReadProtectionEnabled() && try_mapped &&
+        residency_coherent && wait_tick_limit && wait_tick_limit < scheduler.CurrentTick() &&
+        !deferred_count.load(std::memory_order_acquire) && !merged_count.load(std::memory_order_acquire) &&
+        ((window_start < prefetch_start && gpu_modified_ranges.Intersects(window_start, prefetch_start - window_start)) ||
+         (prefetch_end < window_end && gpu_modified_ranges.Intersects(prefetch_end, window_end - prefetch_end))) &&
+        write_ticks.Latest(window_start, window_end - window_start) <= wait_tick_limit &&
+        scheduler.IsFree(wait_tick_limit);
+    enum Attempt { Wide, Prefetch, Required, Staging };
+    for (int attempt = wide_ready ? Wide : try_mapped ? Prefetch : Staging; attempt <= Staging; ++attempt) {
+        const bool mapped_attempt = attempt != Staging;
+        if (attempt == Required && required_start == prefetch_start && required_end == prefetch_end) continue;
+        const VAddr start = attempt == Required ? required_start : attempt == Prefetch ? prefetch_start : window_start;
+        const VAddr end = attempt == Required ? required_end : attempt == Prefetch ? prefetch_end : window_end;
         // Overlapping copies are settled first, so their dirty ranges are available
         // and one readback cannot unmark memory another has not published yet.
         const bool targeted_now = targeted_stage && !mapped_attempt;
@@ -1528,8 +1533,9 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             total_size_bytes = CollectDownloads(arena, start, end - start, readback->copies);
         }
         if (mapped_attempt) {
-            if (total_size_bytes && PrepareMappedReadback(*readback, total_size_bytes, false,
-                                                          attempt == 0 ? wait_tick_limit : 0)) break;
+            if (total_size_bytes && (attempt != Wide || total_size_bytes <= 65536) &&
+                PrepareMappedReadback(*readback, total_size_bytes, false,
+                                      attempt == Required ? 0 : wait_tick_limit)) break;
             // CollectDownloads removed these ranges. Restore them before the next
             // attempt or the conventional, unchanged 512 KiB staging fallback.
             for (const auto& copy : readback->copies) {

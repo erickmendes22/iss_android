@@ -48,7 +48,8 @@ def select(game, out, runtime):
         raise ValueError('AOT requires the matching CUSA00004 eboot, libc and Fios2')
     patches = (out/'patches.bin').read_bytes()
     entries = Path(__file__).with_name('iss_cusa00004_entries.txt')
-    key = hashlib.sha256((runtime/'aot/profile.json').read_bytes()+patches+entries.read_bytes()).hexdigest()
+    hooks = Path(__file__).with_name('iss_cusa00004_hooks.txt')
+    key = hashlib.sha256((runtime/'aot/profile.json').read_bytes()+patches+entries.read_bytes()+hooks.read_bytes()).hexdigest()
     cache = out/'aot-cache'
     cache.mkdir(exist_ok=True)
     library = cache/(key+'.so')
@@ -68,7 +69,7 @@ def select(game, out, runtime):
             print('ISS-AOT patch-image', flush=True)
             patch_image(out/'boot-linked.bin', work/'boot-linked.bin', patches)
             (work/'eboot.elf').symlink_to(out/'eboot.elf')
-            compile_image(game, work, runtime/'aot/bin/bb-recomp', 2, runtime/'aot/bundle', entries)
+            compile_image(game, work, runtime/'aot/bin/bb-recomp', 2, runtime/'aot/bundle', entries, hooks)
             print('ISS-AOT verifying', flush=True)
             with (work/'libIssAot.so').open('rb') as stream:
                 checksum = hashlib.file_digest(stream, 'sha256').hexdigest()

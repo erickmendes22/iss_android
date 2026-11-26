@@ -6,6 +6,7 @@ artifact for native CPU backend integration and contains private game code.
 """
 import argparse
 import json
+import mmap
 from pathlib import Path
 import re
 import struct
@@ -17,7 +18,34 @@ from patches import game_profile, game_title_id
 from prepare import prepare
 
 
-def compile_image(game, work, compiler, jobs, bundle, extra_entries=None):
+def verify_hook_sites(library, catalog):
+    expected = {}
+    for line in catalog.read_text().splitlines():
+        fields = line.partition('#')[0].split()
+        if fields and fields[0] == 'hook':
+            expected[int(fields[1], 0)] = int(fields[2], 0)
+    with library.open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as elf:
+        offset, = struct.unpack_from('<Q', elf, 40)
+        stride, count = struct.unpack_from('<HH', elf, 58)
+        sections = [struct.unpack_from('<II4QII2Q', elf, offset + i * stride) for i in range(count)]
+        for section in sections:
+            if section[1] != 11:  # SHT_DYNSYM
+                continue
+            strings = sections[section[6]][4]
+            for pos in range(section[4], section[4] + section[5], section[9]):
+                name, _, _, index, address, size = struct.unpack_from('<IBBHQQ', elf, pos)
+                if elf[strings + name:strings + name + 15] != b'bbr_hook_sites\0':
+                    continue
+                data = sections[index]
+                start = data[4] + address - data[3]
+                sites = {addr: length for addr, length, flags, _, _ in
+                         struct.iter_unpack('<Q4I', elf[start:start + size]) if flags & 5 == 5}
+                if expected and sites == expected:
+                    return
+    raise ValueError('AOT library lacks the required compiled camera and AA hooks')
+
+
+def compile_image(game, work, compiler, jobs, bundle, extra_entries=None, hooks=None):
     library = work / 'libIssAot.so'
     stats = work / 'compile.txt'
     command = [str(compiler), '--boot', str(work / 'boot-linked.bin'),
@@ -27,6 +55,8 @@ def compile_image(game, work, compiler, jobs, bundle, extra_entries=None):
                '-O1', '--jobs', str(jobs), '--shards', '128', '--no-nice', '--progress']
     if extra_entries is not None:
         command.extend(['--extra-entries', str(extra_entries)])
+    if hooks is not None:
+        command.extend(['--variants', str(hooks)])
     if bundle:
         command.extend(['--bundle-dir', str(bundle)])
     subprocess.run(command, cwd=work, check=True)
@@ -40,6 +70,8 @@ def compile_image(game, work, compiler, jobs, bundle, extra_entries=None):
     traps = re.search(r'units with bbr_trap \(unsupported ops\):\s*(\d+)', report)
     if not lifted or not traps or not int(lifted[1]) or int(lifted[2]) or int(traps[1]):
         raise ValueError('incomplete AOT translation; consult compile.txt in the output directory')
+    if hooks is not None:
+        verify_hook_sites(library, hooks)
     return int(lifted[1])
 
 

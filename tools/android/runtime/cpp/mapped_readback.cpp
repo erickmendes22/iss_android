@@ -201,7 +201,7 @@ struct BufferCache {
     HybridStagingWindow hybrid_staging_hot_pages;
     std::mutex deferred_mutex,eager_mutex;
     std::vector<std::shared_ptr<DeferredReadback>> deferred_readbacks;
-    std::atomic<u32> deferred_count{},eager_count{};
+    std::atomic<u32> deferred_count{},eager_count{},merged_count{};
     static bool DeferredReadbackEnabled(){return true;}
     static bool MappedReadbackPolicy();
     std::tuple<const Buffer*,VAddr,VAddr> GetReadbackWindow(VAddr,u64);
@@ -294,6 +294,21 @@ int main(int argc,char** argv) {
     c.tracker.ranges={{base+0x3ff0,32},{base+0x4100,16}};
     if(mode=="partial_gap")c.tracker.ranges={{base+0x3000,3*4096}};
     for(auto [a,n]:c.tracker.ranges){c.gpu_modified_ranges.Add(a,n);c.write_ticks.Write(a,n,7);}
+    if(mode.starts_with("spread")) {
+        const VAddr neighbor = base + 0x18000;
+        c.tracker.ranges.emplace_back(neighbor,16);
+        c.gpu_modified_ranges.Add(neighbor,16);
+        c.write_ticks.Write(neighbor,16,mode=="spread_newer" ? 9 : 7);
+        if (mode!="spread_hole")
+            c.resident_ranges.Add({{block+6,block+7},vk::DeviceMemory{m2},2});
+        c.scheduler.sem.completed=7;
+        auto r=c.StartDeferredReadback(base+0x3ff0,4);
+        assert(r && r->mapped && r->Done());
+        assert(c.gpu_modified_ranges.Intersects(neighbor,16)==(mode!="spread"));
+        assert(r->CopiesTouchPages(neighbor,neighbor+4096)==(mode=="spread"));
+        assert(c.scheduler.flushes==0 && c.runtime.copies==0 && c.scheduler.sem.waited==0);
+        return 0;
+    }
     if(mode.starts_with("priority_")) {
         c.resident_ranges.Add({{block+2,block+3},vk::DeviceMemory{m2},2});
         const u64 neighbor_tick=mode=="priority_same_tick"?7:mode=="priority_current"?10:9;
