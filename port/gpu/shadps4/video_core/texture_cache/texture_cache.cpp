@@ -1864,6 +1864,20 @@ void TextureCache::GarbageCollectImages() {
     if (total_used_memory < trigger_gc_memory) {
         return;
     }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // OnSubmit can run many times per frame. With unified memory a large buffer
+    // arena keeps heap usage above the soft threshold even after textures retire.
+    // Pace LRU scans while the heap is stable. A growing or critical heap, and
+    // explicit allocation recovery, must still be serviced immediately.
+    const auto gc_now = std::chrono::steady_clock::now();
+    const bool growing = total_used_memory > last_image_gc_usage &&
+                         total_used_memory - last_image_gc_usage >= 32_MB;
+    if (total_used_memory < critical_gc_memory && !growing && gc_now < next_image_gc) {
+        return;
+    }
+    last_image_gc_usage = total_used_memory;
+    next_image_gc = gc_now + std::chrono::milliseconds(33);
+#endif
     std::scoped_lock lock{mutex};
     bool pressured = false;
     bool aggresive = false;
