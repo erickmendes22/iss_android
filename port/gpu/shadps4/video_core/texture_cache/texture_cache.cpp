@@ -1057,7 +1057,37 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
                 // We have a larger image created and a separate one, representing a subres of it
                 // bound as render target. In this case we need to rebind render target.
                 if (cache_image.binding.is_target) {
-                    cache_image.binding.needs_rebind = 1u;
+                    // A live color target may be the only current copy of this slice.
+                    // Materialize the parent before retiring the target, even when
+                    // enumeration encountered the subresource before the parent.
+                    const bool preserve_color = cache_image.info.type == image_info.type &&
+                        (image_info.type == AmdGpu::ImageType::Color2D ||
+                         image_info.type == AmdGpu::ImageType::Color2DArray) &&
+                        cache_image.info.pixel_format == image_info.pixel_format &&
+                        !image_info.props.is_depth && !cache_image.info.props.is_depth &&
+                        !image_info.props.is_block && !cache_image.info.props.is_block &&
+                        image_info.guest_samples == 1 && cache_image.info.guest_samples == 1 &&
+                        cache_image.info.resources.layers == 1 && cache_image.info.resources.levels == 1 &&
+                        static_cast<u32>(slice) < image_info.resources.layers;
+                    if (preserve_color) {
+                        if (!merged_image_id) {
+                            merged_image_id = slot_images.insert(instance, runtime, slot_image_views, image_info);
+                            RegisterImage(merged_image_id);
+                            TrackImage(merged_image_id);
+                        }
+                        auto& target = slot_images[cache_image_id];
+                        auto& parent = slot_images[merged_image_id];
+                        RefreshImage(parent);
+                        RefreshImage(target);
+                        runtime.CopyMip(&target, &parent, mip, slice);
+                        static std::atomic<u64> transfers{};
+                        const auto count = 1 + transfers.fetch_add(1, std::memory_order_relaxed);
+                        if ((count & (count - 1)) == 0) {
+                            LOG_INFO(Render_Vulkan, "Preserved live color target: mip={} slice={} total={}",
+                                     mip, slice, count);
+                        }
+                    }
+                    slot_images[cache_image_id].binding.needs_rebind = 1u;
                     if (merged_image_id) {
                         GetImage(merged_image_id).binding.is_target = 1u;
                     }

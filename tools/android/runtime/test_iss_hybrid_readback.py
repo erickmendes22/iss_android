@@ -31,7 +31,7 @@ class HybridReadbackTest(unittest.TestCase):
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('env.put("TLG_EAGER_READBACK","0");', settings)
         self.assertNotIn('env.put("TLG_EAGER_READBACK","1");', settings)
-        self.assertIn('env.put("TLG_MAPPED_READBACK", hybrid ? "0" : "1");', settings)
+        self.assertIn('env.put("TLG_MAPPED_READBACK","1");', settings)
 
     def test_staged_gpu_writes_must_invalidate_old_copies(self):
         cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()

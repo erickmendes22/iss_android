@@ -73,11 +73,6 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
-    std::printf("ISS hybrid V6 (V2 baseline): read protection=%s, staged buffer copies=%s, eager fence copies=%s, selective backoff=%s\n",
-                RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
-                std::getenv("TLG_MAPPED_READBACK") && std::getenv("TLG_MAPPED_READBACK")[0] == '0' ? "on" : "off",
-                std::getenv("TLG_EAGER_READBACK") && std::getenv("TLG_EAGER_READBACK")[0] == '1' ? "on" : "off",
-                std::getenv("TLG_ISS_EAGER_BACKOFF_63") && std::getenv("TLG_ISS_EAGER_BACKOFF_63")[0] == '1' ? "on" : "off");
     std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
@@ -131,8 +126,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     residency_coherent = bool(residency_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
     mapped_readbacks_enabled = MappedReadbackPolicy() &&
         bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
-        (residency_coherent || instance.NonCoherentAtomSize() <= 4096);
-    std::printf("GPU: mapped arena readback: %s (host-visible=%d coherent=%d atom=%llu)\n",
+        (residency_coherent || (!RegionManager::HybridReadProtectionEnabled() &&
+                                instance.NonCoherentAtomSize() <= 4096));
+    std::printf("GPU: mapped arena readback: %s (host-visible=%d coherent=%d atom=%llu); staging fallback available\n",
                 mapped_readbacks_enabled ? "on" : "off",
                 bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible),
                 residency_coherent, static_cast<unsigned long long>(instance.NonCoherentAtomSize()));
@@ -1489,7 +1485,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         const VAddr end = !mapped_attempt ? window_end : attempt ? required_end : prefetch_end;
         // Overlapping copies are settled first, so their dirty ranges are available
         // and one readback cannot unmark memory another has not published yet.
-        const bool targeted_now = targeted_stage && !try_mapped && !mapped_attempt;
+        const bool targeted_now = targeted_stage && !mapped_attempt;
         SettleDeferredReadbacks(targeted_now ? required_start : start,
                                 targeted_now ? required_end : end,
                                 mapped_attempt ? wait_tick_limit : 0);

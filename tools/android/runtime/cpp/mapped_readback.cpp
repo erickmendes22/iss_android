@@ -223,11 +223,13 @@ struct BufferCache {
 } // namespace VideoCore
 
 int main(int argc,char** argv) {
-    const std::string mode=argc>1?argv[1]:"coherent";
+    const std::string scenario=argc>1?argv[1]:"coherent";
+    const bool hybrid_map=scenario.starts_with("hybrid_map_");
+    const std::string mode=hybrid_map ? scenario.substr(11) : scenario;
     const bool targeted=mode=="hybrid_targeted_pages";
     if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
     const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap" || mode=="hybrid_batching";
-    VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted;
+    VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted || hybrid_map;
     const bool partial=mode.starts_with("partial_");
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);

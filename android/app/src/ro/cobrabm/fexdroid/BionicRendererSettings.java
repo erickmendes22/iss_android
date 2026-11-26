@@ -20,7 +20,7 @@ final class BionicRendererSettings {
   env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",true) ? "1" : "0");
   // Hybrid publishes only GPU-dirty spans. The eager fence path writes whole pages.
-  env.put("TLG_MAPPED_READBACK", hybrid ? "0" : "1");
+  env.put("TLG_MAPPED_READBACK","1");
   env.put("TLG_EAGER_READBACK","0");
 
   env.put("TLG_DYNAMIC_STRIDE",p.getBoolean("renderer_dynamic_stride",true)?"1":"0");
