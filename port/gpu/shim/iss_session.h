@@ -5,12 +5,33 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <chrono>
 #include "tlg_quality.h"
 
 namespace IssSession {
 inline std::atomic<int32_t*> guest_level{nullptr};
 inline std::atomic<uint64_t> gpu_busy_ns{0};
 inline std::atomic<bool> gpu_timing{false};
+
+inline std::atomic<uint64_t> read_fault_samples{0}, read_fault_ns{0};
+
+// Sample the complete guest-read service path, including owner queueing,
+// without starting a timer or updating shared counters on every read fault.
+class ReadFaultSample {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point start{};
+public:
+    explicit ReadFaultSample(bool guest_thread) {
+        static thread_local unsigned sequence = 0;
+        if (guest_thread && (sequence++ % 32 == 0)) start = Clock::now();
+    }
+    ~ReadFaultSample() {
+        if (start == Clock::time_point{}) return;
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start);
+        read_fault_ns.fetch_add(ns.count(), std::memory_order_relaxed);
+        read_fault_samples.fetch_add(1, std::memory_order_relaxed);
+    }
+};
 
 // The VideoOut thread calls this once per source flip, before frame generation.
 class Window {
@@ -65,6 +86,10 @@ public:
                     p99, over33, over50, frames, frames * 1e9 / double(now - start));
         std::printf("SESSION_SETTINGS fps_limit=%d quality_target=%d quality_floor=%d supported=%d\n",
                     limit, target, level ? governor.Level() : 0, int(level != nullptr));
+        const auto read_samples = read_fault_samples.exchange(0, std::memory_order_relaxed);
+        const auto read_ns = read_fault_ns.exchange(0, std::memory_order_relaxed);
+        std::printf("GUEST_READ_FAULTS sampled_1_in=32 samples=%llu sampled_ms=%.3f\n",
+                    static_cast<unsigned long long>(read_samples), read_ns / 1e6);
         const auto busy = gpu_busy_ns.exchange(0, std::memory_order_relaxed);
         if (gpu_timing.load() && busy)
             std::printf("GPU_FRAME_MS avg=%.2f busy_pct=%.1f frames=%u\n",

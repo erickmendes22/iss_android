@@ -1875,8 +1875,16 @@ void TextureCache::GarbageCollectImages() {
     if (total_used_memory < critical_gc_memory && !growing && gc_now < next_image_gc) {
         return;
     }
+    // Do not repeatedly discard textures to reduce usage owned by other
+    // allocations. Back off only if we evicted and the heap did not shrink.
+    const bool stable_pressure = total_used_memory >= pressure_gc_memory &&
+        total_used_memory < critical_gc_memory && !growing &&
+        total_used_memory >= last_image_gc_usage;
+    image_gc_interval_ms = stable_pressure && last_image_gc_evicted
+        ? std::min(image_gc_interval_ms * 2, 250u) : 33u;
+    const auto evictions_before_scan = gc_evictions;
     last_image_gc_usage = total_used_memory;
-    next_image_gc = gc_now + std::chrono::milliseconds(33);
+    next_image_gc = gc_now + std::chrono::milliseconds(image_gc_interval_ms);
 #endif
     std::scoped_lock lock{mutex};
     bool pressured = false;
@@ -2007,6 +2015,9 @@ void TextureCache::GarbageCollectImages() {
         lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
     }
     evict();
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    last_image_gc_evicted = gc_evictions != evictions_before_scan;
+#endif
     // tlg: evictions under memory pressure, at most every 5 s (TLG_FRAME_STATS or not).
     if (pressured || gc_downloads != 0) {
         const auto now = std::chrono::steady_clock::now();

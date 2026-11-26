@@ -106,6 +106,15 @@ public:
         }
 
         RegionBits& bits = GetRegionBits<type>();
+        if constexpr (type == Type::GPU) {
+            // Rebinding an already dirty storage buffer does not require
+            // rebuilding protection masks for the entire 16-MiB region.
+            if (HybridReadProtectionEnabled() &&
+                (enable ? bits.AllInRange(start_page, end_page)
+                        : !bits.AnyInRange(start_page, end_page))) {
+                return;
+            }
+        }
         if constexpr (type == Type::CPU && enable) {
             CountWriteFaults(start_page, end_page);
             NoteCpuBitsSet();

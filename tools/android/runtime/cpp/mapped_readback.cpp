@@ -373,6 +373,19 @@ int main(int argc,char** argv) {
         c.gpu_modified_ranges.Add(base+0x9000,16);
         c.write_ticks.Write(base+0x9000,16,10);
     }
+    if (mode=="sparse_join") {
+        auto first=c.StartDeferredReadback(base+0x3ff0,4);
+        assert(first && first->mapped && !first->applied);
+        // A later write populates a previously clean page inside its 64-KiB envelope.
+        c.tracker.ranges.emplace_back(base+0x5000,16);
+        c.gpu_modified_ranges.Add(base+0x5000,16);
+        c.NoteDeviceWrite(base+0x5000,16,8);
+        auto next=c.StartDeferredReadback(base+0x5000,4);
+        assert(next && next!=first && next->tick==8);
+        assert(c.FinishDeferredReadback(*next,true));
+        assert(c.mem.published.contains(base+0x5000));
+        return 0;
+    }
     const bool current=mode=="current" || mode=="currentoff" || mode=="currentready" ||
         mode=="currentstale" || mode=="currentmapfail" || mode=="currentnoncoherent";
     if(current)c.write_ticks.Write(base+0x3ff0,32,10);

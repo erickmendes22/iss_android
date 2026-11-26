@@ -509,6 +509,8 @@ private:
     std::chrono::steady_clock::time_point gc_report_time{};
     std::chrono::steady_clock::time_point next_image_gc{};
     u64 last_image_gc_usage = 0;
+    unsigned image_gc_interval_ms = 33;
+    bool last_image_gc_evicted = false;
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;

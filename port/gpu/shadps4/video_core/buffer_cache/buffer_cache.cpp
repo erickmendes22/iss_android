@@ -1427,10 +1427,17 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                 join_end <= readback->end) {
                 // A staging envelope covers 512 KiB, but not necessarily each
                 // page inside it. Never return an unrelated incomplete snapshot.
-                if (!readback->mapped &&
-                    !readback->CopiesTouchPages(device_addr, device_addr + size)) {
-                    continue;
+                // A scheduling window can contain gaps. Every requested page
+                // must have data in this snapshot before another fault joins it.
+                bool covered = true;
+                for (VAddr page = Common::AlignDown(device_addr, u64{4096});
+                     page < device_addr + size; page += 4096) {
+                    if (!readback->CopiesTouchPages(page, page + 4096)) {
+                        covered = false;
+                        break;
+                    }
                 }
+                if (!covered) continue;
                 if (readback->mapped && wait_tick_limit && readback->tick > wait_tick_limit &&
                     !scheduler.GetWorkSemaphore()->IsFree(readback->tick)) {
                     // Its wider prefetch waits longer than our own data needs.

@@ -13,10 +13,12 @@
 #include <cmath>
 #include <unordered_set>
 #include <xxhash.h>
+#include "video_core/buffer_cache/region_manager.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "tlg_toggles.h"
 #ifdef ISS_ANDROID_BIONIC
 #include "../../../shim/iss_fsr_diagnostics.h"
+#include "iss_session.h"
 #endif
 #include "tlg_settings.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -4198,6 +4200,9 @@ bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks) {
 }
 
 bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
+#ifdef ISS_ANDROID_BIONIC
+    IssSession::ReadFaultSample sample(!assume_locks);
+#endif
     DrainDrawPipe();
     if (!IsMapped(addr, size)) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
@@ -4210,7 +4215,12 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
     // hundreds per second). TLG_FAST_READ_FAULT=0 restores the round trip.
     static const bool fast = [] { const char* e = std::getenv("TLG_FAST_READ_FAULT"); return !(e && *e == '0'); }();
     if (fast && !assume_locks && !buffer_cache.IsRegionGpuModified(addr, size)) {
-        buffer_cache.ReleaseReadProtection(addr, size);
+        // Hybrid tracks GPU dirtiness and read protection together under the
+        // region lock. A clean observation needs no transition. A GPU writer
+        // can re-protect this page immediately after the lock-free query.
+        if (!VideoCore::RegionManager::HybridReadProtectionEnabled()) {
+            buffer_cache.ReleaseReadProtection(addr, size);
+        }
     } else if (!assume_locks && !image_readback && buffer_cache.TryEagerRead(addr, size)) {
         // tlg: served from the copy made at the last fence (TLG_EAGER_READBACK). Not after an
         // image readback: that resolved newer data the buffer copy would overwrite.

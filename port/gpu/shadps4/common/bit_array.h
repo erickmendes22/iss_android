@@ -207,6 +207,19 @@ public:
         return !None();
     }
 
+    inline constexpr bool AllInRange(size_t start, size_t end) const {
+        if (start >= end || end > N) return false;
+        const size_t first = start / BITS_PER_WORD;
+        const size_t last = (end - 1) / BITS_PER_WORD;
+        for (size_t word = first; word <= last; ++word) {
+            u64 mask = ~u64{0};
+            if (word == first) mask &= ~u64{0} << (start % BITS_PER_WORD);
+            if (word == last) mask &= ~u64{0} >> (BITS_PER_WORD - 1 - (end - 1) % BITS_PER_WORD);
+            if ((data[word] & mask) != mask) return false;
+        }
+        return true;
+    }
+
     inline constexpr bool AnyInRange(size_t start, size_t end) const {
         const size_t first_word = start / BITS_PER_WORD;
         const size_t last_word = (end - 1) / BITS_PER_WORD;

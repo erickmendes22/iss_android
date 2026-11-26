@@ -50,7 +50,7 @@ class HybridReadbackTest(unittest.TestCase):
         ui = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
         self.assertIn('TLG_ISS_HYBRID_TARGETED_STAGE',src)
         self.assertIn('hybrid_staging_hot_pages.ForEachSelected(',src)
-        self.assertIn('readback->CopiesTouchPages(device_addr, device_addr + size)',src)
+        self.assertIn('readback->CopiesTouchPages(page, page + 4096)',src)
         self.assertIn('hybrid && p.getBoolean("renderer_hybrid_targeted_staging",true)',settings)
         self.assertIn('preferences.getBoolean(TARGETED_KEY,true)',ui)
         self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',ui)

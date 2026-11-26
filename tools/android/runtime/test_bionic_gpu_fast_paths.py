@@ -31,6 +31,7 @@ struct RegionBits {
     mutable unsigned scans=0;
     void SetRange(size_t a,size_t b){for(;a<b;++a)bits.set(a);}
     void UnsetRange(size_t a,size_t b){for(;a<b;++a)bits.reset(a);}
+    bool AllInRange(size_t a,size_t b)const{for(;a<b;++a)if(!bits[a])return false;return true;}
     bool Any()const{return bits.any();}
     bool AnyInRange(size_t a,size_t b)const{++scans;for(;a<b;++a)if(bits[a])return true;return false;}
 };
@@ -74,6 +75,8 @@ int main(){
     RegionManager::hybrid_read_protection=true;
     RegionManager hybrid;
     hybrid.ChangeRegionState<Type::GPU,true>(4096,8192);
+    hybrid.ChangeRegionState<Type::GPU,true>(4096,8192);
+    hybrid.ChangeRegionState<Type::GPU,false>(4096,8192);
     hybrid.ChangeRegionState<Type::GPU,false>(4096,8192);
     assert(hybrid.protections==2u);
     RegionManager::hybrid_read_protection=false;
