@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#ifdef ISS_ANDROID_BIONIC
+#include "iss_session.h"
+#endif
 #include <filesystem>
 #include <xxhash.h>
 #include "video_core/amdgpu/liverpool.h"
@@ -1125,6 +1128,15 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     // Copying that stale host image over the freshly uploaded destination resurrects old texels.
     // Refresh the source first; clean GPU-authored images take the existing no-op path.
     RefreshImage(src_image);
+    // The copied layers can contain colors that only exist on the GPU.
+    // Initialize the expanded view's guest mip hashes during its first refresh,
+    // before overwriting those layers with the authoritative GPU copy.
+    new_image.flags |= src_image.flags & ImageFlagBits::GpuModified;
+#ifdef ISS_ANDROID_BIONIC
+    IssSession::grown_images.fetch_add(1, std::memory_order_relaxed);
+    if (True(src_image.flags & ImageFlagBits::GpuModified))
+        IssSession::gpu_grown_images.fetch_add(1, std::memory_order_relaxed);
+#endif
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
 

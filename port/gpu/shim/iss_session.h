@@ -11,7 +11,9 @@
 namespace IssSession {
 inline std::atomic<int32_t*> guest_level{nullptr};
 inline std::atomic<uint64_t> gpu_busy_ns{0};
-inline std::atomic<bool> gpu_timing{false};
+inline std::atomic<bool> gpu_timing{false}, hybrid_reads{false};
+inline std::atomic<uint64_t> small_merged{}, small_fallback{}, grown_images{}, gpu_grown_images{};
+inline std::atomic<uint64_t> predicate_downloads{};
 
 inline std::atomic<uint64_t> read_fault_samples{0}, read_fault_ns{0};
 
@@ -90,6 +92,14 @@ public:
         const auto read_ns = read_fault_ns.exchange(0, std::memory_order_relaxed);
         std::printf("GUEST_READ_FAULTS sampled_1_in=32 samples=%llu sampled_ms=%.3f\n",
                     static_cast<unsigned long long>(read_samples), read_ns / 1e6);
+        std::printf("READBACK_EFFECTS mode=%s small_merge_ok=%llu small_merge_fallback=%llu "
+                    "image_growth=%llu gpu_owned_growth=%llu predicate_dirty_page_reads=%llu\n",
+                    hybrid_reads.load() ? "Hybrid2" : "Relaxed1",
+                    static_cast<unsigned long long>(small_merged.exchange(0)),
+                    static_cast<unsigned long long>(small_fallback.exchange(0)),
+                    static_cast<unsigned long long>(grown_images.exchange(0)),
+                    static_cast<unsigned long long>(gpu_grown_images.exchange(0)),
+                    static_cast<unsigned long long>(predicate_downloads.exchange(0)));
         const auto busy = gpu_busy_ns.exchange(0, std::memory_order_relaxed);
         if (gpu_timing.load() && busy)
             std::printf("GPU_FRAME_MS avg=%.2f busy_pct=%.1f frames=%u\n",

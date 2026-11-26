@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#ifdef ISS_ANDROID_BIONIC
+#include "iss_session.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -73,6 +76,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    IssSession::hybrid_reads.store(RegionManager::HybridReadProtectionEnabled());
     std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
@@ -496,6 +500,9 @@ void BufferCache::PrepareConditionalRead(VAddr addr) {
     constexpr u64 page_size = 4096;
     const VAddr page = Common::AlignDown(addr, page_size);
     const u32 block = page >> block_shift;
+#ifdef ISS_ANDROID_BIONIC
+    IssSession::predicate_downloads.fetch_add(1, std::memory_order_relaxed);
+#endif
     DownloadMemory(GetArena(block, block), page, page_size);
 }
 
@@ -1903,10 +1910,10 @@ bool BufferCache::CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64
     // Bound the extra CPU snapshot. Aliases/permissions are checked atomically by
     // TryCpuWriteBacking; overlapping memcpy must keep the normal libc contract.
     if (!enabled || EmulatorSettings.IsDirectMemoryAccessEnabled() ||
-        size < 64 || size > (4ULL << 20) || dst + size < dst) return false;
+        size < 16 || size > (4ULL << 20) || dst + size < dst) return false;
     const auto source = reinterpret_cast<VAddr>(src);
     if (src && (source + size < source || (dst < source + size && source < dst + size))) return false;
-    std::vector<u8> payload(size);
+    boost::container::small_vector<u8, 64> payload(size);
     // Read a protected source on the caller, before entering the owner queue. A
     // source-image readback may itself fault/wait and cannot run on the cache owner.
     if (src) std::memcpy(payload.data(), src, size);
@@ -1931,6 +1938,10 @@ bool BufferCache::CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64
         texture_cache.InvalidateMemory(dst, size);
         applied = true;
     });
+    if (size < 64) {
+        (applied ? IssSession::small_merged : IssSession::small_fallback)
+            .fetch_add(1, std::memory_order_relaxed);
+    }
     if (ReadbackStatsEnabled()) {
         if (applied) {
             Readbacks().cpu_merge_applied.fetch_add(1);
