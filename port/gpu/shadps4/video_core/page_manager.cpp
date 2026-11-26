@@ -202,7 +202,7 @@ struct PageManager::Impl {
 #if defined(ISS_ANDROID_BIONIC) && defined(ARCH_ARM64)
             static thread_local unsigned sequence{};
             static thread_local bool recording{};
-            if (!is_gpu_thread && !recording && IssSession::hybrid_reads.load(std::memory_order_relaxed) &&
+            if (!is_gpu_thread && !recording &&
                 (++sequence % 256 == 0)) {
                 recording = true;
                 GuestRegs regs{};

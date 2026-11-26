@@ -95,7 +95,7 @@ public:
      * @param size          Size in bytes to mark or unmark as modified
      */
     template <Type type, bool enable>
-    void ChangeRegionState(u64 dirty_addr, u64 size) noexcept(type == Type::GPU) {
+    void ChangeRegionState(u64 dirty_addr, u64 size, bool watch_guest_read = false) noexcept(type == Type::GPU) {
         RENDERER_TRACE;
         const size_t offset = dirty_addr - cpu_addr;
         const size_t start_page = SanitizeAddress(offset) / TRACKER_BYTES_PER_PAGE;
@@ -139,6 +139,15 @@ public:
             if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise ||
                 HybridReadProtectionEnabled()) {
                 UpdateProtection<enable, true>();
+            } else if (watch_guest_read && enable) {
+                // The binding and GPU dirtiness are published under the same region lock.
+                RegionBits newly_watched(readable, start_page, end_page);
+                if (newly_watched.Any()) {
+                    readable.UnsetRange(start_page, end_page);
+                    tracker->UpdatePageWatchersForRegion<true, true>(cpu_addr, newly_watched);
+                }
+            } else if constexpr (!enable) {
+                if (!readable.AllInRange(start_page, end_page)) UpdateProtection<false, true>();
             }
         }
     }
@@ -260,12 +269,15 @@ private:
     template <bool track, bool is_read>
     void UpdateProtection() {
         RENDERER_TRACE;
-        RegionBits mask = is_read ? (~gpu ^ readable) : (cpu ^ writeable);
+        // In Relaxed only selected GPU-dirty pages carry a read watcher.
+        // Release a watcher only after that page becomes clean.
+        RegionBits mask = is_read ? (track ? (gpu & readable) : (~gpu & ~readable))
+                                  : (cpu ^ writeable);
         if (mask.None()) {
             return;
         }
         if constexpr (is_read) {
-            readable = ~gpu;
+            readable ^= mask;
         } else {
             writeable = cpu;
         }

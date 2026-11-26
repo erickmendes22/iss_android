@@ -13,6 +13,7 @@ class GpuFastPathTests(unittest.TestCase):
         bodies = '\n'.join(method(source, signature) for signature in (
             '    template <Type type, bool enable>\n    void ChangeRegionState(',
             '    template <Type type>\n    [[nodiscard]] bool IsRegionModified(',
+            '    template <bool track, bool is_read>\n    void UpdateProtection()',
             '    void NoteGpuBitsSet()', '    void NoteGpuBitsCleared()'))
         reuse.ResourceReuseTests().run_cpp(r'''
 #include <algorithm>
@@ -29,6 +30,13 @@ struct {GpuReadbacksMode mode;auto GetReadbacksMode(){return mode;}} EmulatorSet
 struct RegionBits {
     std::bitset<32> bits;
     mutable unsigned scans=0;
+    RegionBits()=default;
+    RegionBits(const RegionBits& src,size_t a,size_t b){for(;a<b;++a)bits[a]=src.bits[a];}
+    bool None()const{return bits.none();}
+    RegionBits operator~()const{RegionBits r;r.bits=~bits;return r;}
+    RegionBits operator&(const RegionBits& o)const{RegionBits r;r.bits=bits&o.bits;return r;}
+    RegionBits operator^(const RegionBits& o)const{RegionBits r;r.bits=bits^o.bits;return r;}
+    RegionBits& operator^=(const RegionBits& o){bits^=o.bits;return *this;}
     void SetRange(size_t a,size_t b){for(;a<b;++a)bits.set(a);}
     void UnsetRange(size_t a,size_t b){for(;a<b;++a)bits.reset(a);}
     bool AllInRange(size_t a,size_t b)const{for(;a<b;++a)if(!bits[a])return false;return true;}
@@ -38,7 +46,12 @@ struct RegionBits {
 struct RegionManager {
     static constexpr size_t TRACKER_BYTES_PER_PAGE=4096,NUM_PAGES_PER_REGION=32;
     u64 cpu_addr=0;
-    RegionBits cpu,gpu;
+    RegionBits cpu,gpu,readable,writeable;
+    RegionManager(){readable.bits.set();}
+    RegionManager* tracker=this;
+    template<bool track,bool read> void UpdatePageWatchersForRegion(u64, RegionBits& mask){
+        assert(mask.Any()); ++protections;
+    }
     std::atomic<bool> cpu_any{true},gpu_any{false};
     unsigned protections=0;
     static size_t SanitizeAddress(size_t a){return size_t(std::max<s64>(s64(a),0));}
@@ -47,7 +60,7 @@ struct RegionManager {
     void CountWriteFaults(size_t,size_t){}void NoteCpuBitsSet(){}void NoteCpuBitsCleared(){}
     static inline bool hybrid_read_protection=false;
     static bool HybridReadProtectionEnabled(){return hybrid_read_protection && EmulatorSettings.GetReadbacksMode()==GpuReadbacksMode::Relaxed;}
-    template<bool,bool> void UpdateProtection(){++protections;}
+
 ''' + bodies + r'''
 };
 int main(){
@@ -80,6 +93,15 @@ int main(){
     hybrid.ChangeRegionState<Type::GPU,false>(4096,8192);
     assert(hybrid.protections==2u);
     RegionManager::hybrid_read_protection=false;
+    RegionManager selected;
+    selected.ChangeRegionState<Type::GPU,true>(4096,4096);
+    selected.ChangeRegionState<Type::GPU,true>(8192,48,true);
+    selected.ChangeRegionState<Type::GPU,true>(8192,48,true);
+    assert(selected.protections==1 && selected.readable.bits[1] && !selected.readable.bits[2]);
+    selected.ChangeRegionState<Type::GPU,false>(4096,4096);
+    assert(selected.protections==1 && !selected.readable.bits[2]);
+    selected.ChangeRegionState<Type::GPU,false>(8192,4096);
+    assert(selected.protections==2 && selected.readable.bits.all());
 }
 ''')
 

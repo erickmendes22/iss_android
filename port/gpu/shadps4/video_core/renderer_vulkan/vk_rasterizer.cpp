@@ -2940,8 +2940,19 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 if (!desc.is_written && size >= HugeBindSize) {
                     NoteHugeBind(vsharp.base_address, size);
                 }
+                bool watch_guest_read = false;
+#ifdef ISS_ANDROID_BIONIC
+                // Both layouts were observed at guest CPU reads in the CUSA00004 profile.
+                watch_guest_read = desc.is_written &&
+                    EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
+                    !IssSession::hybrid_reads.load(std::memory_order_relaxed) &&
+                    ((buffer_index == 0 && size == 48 && (vsharp.base_address & 255) == 0) ||
+                     (buffer_index == 1 && size == 2500 && stage.pgm_hash == 0xa8b68717));
+                if (watch_guest_read)
+                    IssSession::feedback_binds.fetch_add(1, std::memory_order_relaxed);
+#endif
                 const auto [buffer, offset] = buffer_cache.ObtainBuffer(
-                    vsharp.base_address, size, desc.is_written, desc.is_formatted);
+                    vsharp.base_address, size, desc.is_written, desc.is_formatted, watch_guest_read);
                 const u64 offset_aligned = Common::AlignDown(offset, alignment);
                 const u64 adjust = offset - offset_aligned;
                 if (adjust % 4 != 0) {
@@ -4230,7 +4241,7 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
         // Hybrid tracks GPU dirtiness and read protection together under the
         // region lock. A clean observation needs no transition. A GPU writer
         // can re-protect this page immediately after the lock-free query.
-        if (!VideoCore::RegionManager::HybridReadProtectionEnabled()) {
+        if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed) {
             buffer_cache.ReleaseReadProtection(addr, size);
         }
     } else if (!assume_locks && !image_readback && buffer_cache.TryEagerRead(addr, size)) {

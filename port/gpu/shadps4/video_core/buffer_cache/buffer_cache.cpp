@@ -625,7 +625,8 @@ void PrintBufferStats() {
 } // namespace
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
-                                                        bool is_written, bool is_texel_buffer) {
+                                                        bool is_written, bool is_texel_buffer,
+                                                        bool watch_guest_read) {
     if (is_written) {
         NoteGpuWriteForEager(device_addr, size);
     }
@@ -668,7 +669,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
     const u64 uploaded_before = TlgStats::buffer_upload_bytes.load(std::memory_order_relaxed);
-    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
+    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer, watch_guest_read);
     if (stats) {
         auto& region = Stats().regions[RegionKey(device_addr)];
         ++region.arena_count;
@@ -2064,13 +2065,13 @@ void BufferCache::FlushMergedWrites(const Buffer* arena, VAddr device_addr, u64 
 }
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
-                                    bool is_written, bool is_texel_buffer) {
+                                    bool is_written, bool is_texel_buffer, bool watch_guest_read) {
     FlushMergedWrites(arena, device_addr, size);
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};
     memory_tracker->ForEachUploadRange(
-        device_addr, size, is_written,
+        device_addr, size, is_written, watch_guest_read,
         [&](u64 addr, u64 size) {
             copies.emplace_back(total_size_bytes, addr, size);
             total_size_bytes += size;
