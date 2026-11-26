@@ -108,7 +108,7 @@ public:
         RegionBits& bits = GetRegionBits<type>();
         if constexpr (type == Type::GPU) {
             // Rebinding an already dirty storage buffer does not require
-            // rebuilding protection masks for the entire 16-MiB region.
+            // rebuilding protection masks for the entire tracking region.
             if (HybridReadProtectionEnabled() &&
                 (enable ? bits.AllInRange(start_page, end_page)
                         : !bits.AnyInRange(start_page, end_page))) {

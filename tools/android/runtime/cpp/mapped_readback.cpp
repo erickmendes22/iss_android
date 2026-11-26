@@ -230,7 +230,7 @@ int main(int argc,char** argv) {
     if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
     const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap" || mode=="hybrid_batching";
     VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted || hybrid_map;
-    const bool partial=mode.starts_with("partial_");
+    const bool partial=mode.starts_with("partial_") || mode=="sparse_join";
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
     if(mode=="currentoff")setenv("TLG_MAPPED_READBACK_CURRENT","0",1);
@@ -374,14 +374,16 @@ int main(int argc,char** argv) {
         c.write_ticks.Write(base+0x9000,16,10);
     }
     if (mode=="sparse_join") {
+        // This page has the same producer tick but its dirty range is held by
+        // another pending copy when the first snapshot is created.
+        c.write_ticks.Write(base+0x5000,16,7);
         auto first=c.StartDeferredReadback(base+0x3ff0,4);
         assert(first && first->mapped && !first->applied);
-        // A later write populates a previously clean page inside its 64-KiB envelope.
+        // Recovery restores that dirty range inside the first snapshot's 64-KiB envelope.
         c.tracker.ranges.emplace_back(base+0x5000,16);
         c.gpu_modified_ranges.Add(base+0x5000,16);
-        c.NoteDeviceWrite(base+0x5000,16,8);
         auto next=c.StartDeferredReadback(base+0x5000,4);
-        assert(next && next!=first && next->tick==8);
+        assert(next && next!=first && next->tick==7);
         assert(c.FinishDeferredReadback(*next,true));
         assert(c.mem.published.contains(base+0x5000));
         return 0;
