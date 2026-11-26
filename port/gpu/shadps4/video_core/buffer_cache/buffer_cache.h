@@ -179,6 +179,7 @@ public:
     /// wrote elsewhere on those pages stay intact. Relaxed serializes the write on the owner,
     /// settles pending images and excludes physical aliases. False: caller writes normally.
     bool CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size);
+    void PrepareConditionalRead(VAddr addr);
     bool CpuStoreOverwrite(VAddr dst, const void* src, u64 size);
 
     /// tlg: TLG_EAGER_READBACK=1 (precise readbacks): pages the guest reads back after GPU

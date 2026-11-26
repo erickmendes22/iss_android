@@ -226,6 +226,7 @@ int main(int argc,char** argv) {
     const std::string scenario=argc>1?argv[1]:"coherent";
     const bool hybrid_map=scenario.starts_with("hybrid_map_");
     const std::string mode=hybrid_map ? scenario.substr(11) : scenario;
+    if(mode.starts_with("spread")) setenv("TLG_ISS_WIDE_READBACK","1",1);
     const bool targeted=mode=="hybrid_targeted_pages";
     if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
     const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap" || mode=="hybrid_batching";

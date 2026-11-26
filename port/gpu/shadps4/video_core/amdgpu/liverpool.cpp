@@ -1228,6 +1228,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto* dispatch_indirect =
                     reinterpret_cast<const PM4CmdDispatchIndirect*>(header);
                 auto& cs_program = GetCsRegs();
+                cs_program.dispatch_initiator = dispatch_indirect->dispatch_initiator;
                 const auto offset = dispatch_indirect->data_offset;
                 const auto size = sizeof(PM4CmdDispatchIndirect::GroupDimensions);
                 if (DebugState.DumpingCurrentReg()) {
@@ -1502,7 +1503,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (cond_exec->command.Value() != 0) {
                     LOG_WARNING(Render, "IT_COND_EXEC used a reserved command");
                 }
-                const auto skip = *cond_exec->Address() == false;
+                const auto* predicate = cond_exec->Address();
+                if (rasterizer) {
+                    rasterizer->PrepareConditionalRead(reinterpret_cast<VAddr>(predicate));
+                }
+                const bool skip = *predicate == 0;
                 if (skip) {
                     dcb = NextPacket(dcb,
                                      header->type3.NumWords() + 1 + cond_exec->exec_count.Value());
@@ -1754,17 +1759,20 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::DispatchDirect: {
             const auto* dispatch_direct = reinterpret_cast<const PM4CmdDispatchDirect*>(header);
-            if (auto it = std::ranges::find(indirect_patches, header, &IndirectPatch::header);
-                it != indirect_patches.end()) {
+            auto& cs_program = GetCsRegs();
+            cs_program.dispatch_initiator = dispatch_direct->dispatch_initiator;
+            if (auto it = std::find_if(indirect_patches.rbegin(), indirect_patches.rend(),
+                                       [&](const auto& patch) { return patch.header == header; });
+                it != indirect_patches.rend()) {
                 const auto size = sizeof(PM4CmdDispatchIndirect::GroupDimensions);
-                rasterizer->DispatchIndirect(it->indirect_addr, 0, size);
+                if (rasterizer && (cs_program.dispatch_initiator & 1)) {
+                    rasterizer->DispatchIndirect(it->indirect_addr, 0, size);
+                }
                 break;
             }
-            auto& cs_program = GetCsRegs();
             cs_program.dim_x = dispatch_direct->dim_x;
             cs_program.dim_y = dispatch_direct->dim_y;
             cs_program.dim_z = dispatch_direct->dim_z;
-            cs_program.dispatch_initiator = dispatch_direct->dispatch_initiator;
             if (DebugState.DumpingCurrentReg()) {
                 DebugState.PushRegsDumpCompute(base_addr, reinterpret_cast<uintptr_t>(header),
                                                cs_program);
@@ -1782,6 +1790,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             const auto* dispatch_indirect =
                 reinterpret_cast<const PM4CmdDispatchIndirectMec*>(header);
             auto& cs_program = GetCsRegs();
+            cs_program.dispatch_initiator = dispatch_indirect->dispatch_initiator;
             const auto ib_address = dispatch_indirect->Address<VAddr>();
             const auto size = sizeof(PM4CmdDispatchIndirect::GroupDimensions);
             if (DebugState.DumpingCurrentReg()) {

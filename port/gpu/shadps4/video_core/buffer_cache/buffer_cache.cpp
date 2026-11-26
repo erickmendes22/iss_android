@@ -489,6 +489,16 @@ u64 BufferCache::CollectDownloads(const Buffer* arena, VAddr device_addr, u64 si
     return total_size_bytes;
 }
 
+void BufferCache::PrepareConditionalRead(VAddr addr) {
+    if (!memory_tracker->IsRegionGpuModified(addr, sizeof(u32))) return;
+    // DownloadMemory clears ownership by page. Preserve every dirty byte on
+    // the predicate page without dragging neighboring effect buffers to the CPU.
+    constexpr u64 page_size = 4096;
+    const VAddr page = Common::AlignDown(addr, page_size);
+    const u32 block = page >> block_shift;
+    DownloadMemory(GetArena(block, block), page, page_size);
+}
+
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
     // Copies back in flight over this memory took their ranges out of gpu_modified_ranges:
     // applied, or put back when stale, before those are looked at.
@@ -1485,7 +1495,11 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                                               arena->cpu_addr + arena->size_bytes);
     // Batch scattered records from the same submitted producer, even while the
     // fault is waiting for it. A newer producer must never extend this wait.
-    const bool batch_window = RegionManager::HybridReadProtectionEnabled() && try_mapped &&
+    static const bool wide_enabled = [] {
+        const char* env = std::getenv("TLG_ISS_WIDE_READBACK");
+        return env && env[0] == '1';
+    }();
+    const bool batch_window = wide_enabled && RegionManager::HybridReadProtectionEnabled() && try_mapped &&
         residency_coherent && wait_tick_limit && wait_tick_limit < scheduler.CurrentTick() &&
         !deferred_count.load(std::memory_order_acquire) && !merged_count.load(std::memory_order_acquire) &&
         ((window_start < prefetch_start && gpu_modified_ranges.Intersects(window_start, prefetch_start - window_start)) ||

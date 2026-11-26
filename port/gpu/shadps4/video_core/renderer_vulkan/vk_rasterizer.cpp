@@ -4199,6 +4199,14 @@ bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks) {
     return true;
 }
 
+// COND_EXEC is evaluated by the host command processor, including in Relaxed mode.
+// Its opcode already drains queued draws before reaching this point.
+void Rasterizer::PrepareConditionalRead(VAddr addr) {
+    if (!IsMapped(addr, sizeof(u32))) return;
+    texture_cache.ResolveReadbacks(addr, sizeof(u32), true, VideoCore::ReadbackSource::CpuRead);
+    buffer_cache.PrepareConditionalRead(addr);
+}
+
 bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
 #ifdef ISS_ANDROID_BIONIC
     IssSession::ReadFaultSample sample(!assume_locks);
