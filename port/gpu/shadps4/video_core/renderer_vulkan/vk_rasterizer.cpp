@@ -2956,6 +2956,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                         (desc.is_written ? vk::AccessFlagBits2::eShaderWrite
                                          : vk::AccessFlagBits2::eNone));
                 if (desc.is_written) {
+#ifdef ISS_ANDROID_BIONIC
+                    if (IssSession::hybrid_reads.load(std::memory_order_relaxed))
+                        IssReadbackTrace::Bind(vsharp.base_address, size, stage.pgm_hash, buffer_index);
+#endif
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }

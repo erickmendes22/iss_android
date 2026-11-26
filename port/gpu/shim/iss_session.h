@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <chrono>
 #include "tlg_quality.h"
+#include "iss_readback_trace.h"
 
 namespace IssSession {
 inline std::atomic<int32_t*> guest_level{nullptr};
@@ -100,6 +101,7 @@ public:
                     static_cast<unsigned long long>(grown_images.exchange(0)),
                     static_cast<unsigned long long>(gpu_grown_images.exchange(0)),
                     static_cast<unsigned long long>(predicate_downloads.exchange(0)));
+        if (hybrid_reads.load(std::memory_order_relaxed)) IssReadbackTrace::Report();
         const auto busy = gpu_busy_ns.exchange(0, std::memory_order_relaxed);
         if (gpu_timing.load() && busy)
             std::printf("GPU_FRAME_MS avg=%.2f busy_pct=%.1f frames=%u\n",

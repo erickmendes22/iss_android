@@ -6,6 +6,9 @@
 #include "../../../../src/guest_cpu.h"
 #include "../../tlggpu.h"
 #endif
+#ifdef ISS_ANDROID_BIONIC
+#include "iss_session.h"
+#endif
 #include <vector>
 #include <array>
 #include <cerrno>
@@ -196,6 +199,18 @@ struct PageManager::Impl {
 #endif
             return rasterizer->OnWriteFault(addr, is_gpu_thread);
         } else {
+#if defined(ISS_ANDROID_BIONIC) && defined(ARCH_ARM64)
+            static thread_local unsigned sequence{};
+            static thread_local bool recording{};
+            if (!is_gpu_thread && !recording && IssSession::hybrid_reads.load(std::memory_order_relaxed) &&
+                (++sequence % 256 == 0)) {
+                recording = true;
+                GuestRegs regs{};
+                const int origin = guest_cpu_signal_regs(context, &regs);
+                IssReadbackTrace::Read(addr, regs.rip, origin);
+                recording = false;
+            }
+#endif
             TlgStats::read_faults.fetch_add(1, std::memory_order_relaxed);
             TlgStats::Timer timer{TlgStats::t_read_faults};
             return rasterizer->ReadMemory(addr, 8, is_gpu_thread);
