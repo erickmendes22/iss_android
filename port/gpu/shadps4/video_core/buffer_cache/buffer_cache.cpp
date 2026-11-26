@@ -215,7 +215,7 @@ struct ReadbackStats {
     /// Deferred readbacks: recorded, joined, applied by guest threads, stale (fell back to the
     /// download), guest time from the request to the copy applied, bytes copied.
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
-    std::atomic<u64> shared_completions{0};
+    std::atomic<u64> shared_completions{0}, wide_attempts{0}, wide_neighbors{0};
     std::atomic<u64> deferred_retries{0}, retry_applied{0};
     std::atomic<u64> cpu_store_applied{0}, cpu_store_fallback{0},
         cpu_store_coverage_rejected{0}, cpu_store_backing_rejected{0};
@@ -295,6 +295,9 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_prefetch_narrowed.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_wider_wait_bypassed.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_coherent_skipped.exchange(0)));
+    std::printf("  hybrid mapped batches: %llu attempted, %llu with extra blocks recorded\n",
+                static_cast<unsigned long long>(r.wide_attempts.exchange(0)),
+                static_cast<unsigned long long>(r.wide_neighbors.exchange(0)));
     std::printf("  CPU write merge: %llu applied, %.2f MB, %llu rejected\n",
                 static_cast<unsigned long long>(r.cpu_merge_applied.exchange(0)),
                 r.cpu_merge_bytes.exchange(0) / 1048576.0,
@@ -1480,17 +1483,15 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
     const VAddr prefetch_start = std::max<VAddr>(Common::AlignDown(device_addr, u64{65536}), arena->cpu_addr);
     const VAddr prefetch_end = std::min<VAddr>(std::max<VAddr>(prefetch_start + 65536, required_end),
                                               arena->cpu_addr + arena->size_bytes);
-    // Publish scattered records together only when the requested producer has
-    // already completed. Never make a fault wait for speculative neighbors.
-    const bool wide_ready = RegionManager::HybridReadProtectionEnabled() && try_mapped &&
+    // Batch scattered records from the same submitted producer, even while the
+    // fault is waiting for it. A newer producer must never extend this wait.
+    const bool batch_window = RegionManager::HybridReadProtectionEnabled() && try_mapped &&
         residency_coherent && wait_tick_limit && wait_tick_limit < scheduler.CurrentTick() &&
         !deferred_count.load(std::memory_order_acquire) && !merged_count.load(std::memory_order_acquire) &&
         ((window_start < prefetch_start && gpu_modified_ranges.Intersects(window_start, prefetch_start - window_start)) ||
-         (prefetch_end < window_end && gpu_modified_ranges.Intersects(prefetch_end, window_end - prefetch_end))) &&
-        write_ticks.Latest(window_start, window_end - window_start) <= wait_tick_limit &&
-        scheduler.IsFree(wait_tick_limit);
+         (prefetch_end < window_end && gpu_modified_ranges.Intersects(prefetch_end, window_end - prefetch_end)));
     enum Attempt { Wide, Prefetch, Required, Staging };
-    for (int attempt = wide_ready ? Wide : try_mapped ? Prefetch : Staging; attempt <= Staging; ++attempt) {
+    for (int attempt = batch_window ? Wide : try_mapped ? Prefetch : Staging; attempt <= Staging; ++attempt) {
         const bool mapped_attempt = attempt != Staging;
         if (attempt == Required && required_start == prefetch_start && required_end == prefetch_end) continue;
         const VAddr start = attempt == Required ? required_start : attempt == Prefetch ? prefetch_start : window_start;
@@ -1529,13 +1530,40 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                     }
                 });
         }
+        if (attempt == Wide) {
+            // Check independent 64 KiB blocks. A newer write in a distant block
+            // must not discard usable neighbors or remove those newer dirty ranges.
+            // Always include the entire request. PrepareMappedReadback checks
+            // the actual producer and residency of every collected dirty span.
+            selected = true;
+            if (ReadbackStatsEnabled()) Readbacks().wide_attempts.fetch_add(1);
+            for (VAddr block = window_start; block < window_end; block += 65536) {
+                const VAddr end_block = std::min<VAddr>(block + 65536, window_end);
+                const bool required = block < required_end && required_start < end_block;
+                if (!required && (!gpu_modified_ranges.Intersects(block, end_block - block) ||
+                    write_ticks.Latest(block, end_block - block) > wait_tick_limit)) continue;
+                const auto first = readback->copies.size();
+                const u64 offset = total_size_bytes;
+                total_size_bytes += CollectDownloads(arena, block, end_block - block, readback->copies);
+                for (auto i = first; i < readback->copies.size(); ++i)
+                    readback->copies[i].dstOffset += offset;
+                if (total_size_bytes > 65536) break; // restored before the narrower retry
+            }
+        }
         if (!selected) {
             total_size_bytes = CollectDownloads(arena, start, end - start, readback->copies);
         }
         if (mapped_attempt) {
             if (total_size_bytes && (attempt != Wide || total_size_bytes <= 65536) &&
                 PrepareMappedReadback(*readback, total_size_bytes, false,
-                                      attempt == Required ? 0 : wait_tick_limit)) break;
+                                      attempt == Required ? 0 : wait_tick_limit)) {
+                if (attempt == Wide && ReadbackStatsEnabled() &&
+                    std::any_of(readback->copies.begin(), readback->copies.end(), [&](const auto& copy) {
+                        const auto addr = readback->arena_base + copy.srcOffset;
+                        return addr < prefetch_start || addr + copy.size > prefetch_end;
+                    })) Readbacks().wide_neighbors.fetch_add(1);
+                break;
+            }
             // CollectDownloads removed these ranges. Restore them before the next
             // attempt or the conventional, unchanged 512 KiB staging fallback.
             for (const auto& copy : readback->copies) {

@@ -31,7 +31,7 @@ struct Settings {
     bool IsDirectMemoryAccessEnabled(){return dma;}
 } EmulatorSettings;
 struct Stats {
-    std::atomic<u64> mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
+    std::atomic<u64> wide_attempts{},wide_neighbors{},mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
         mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
         mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
@@ -301,6 +301,21 @@ int main(int argc,char** argv) {
         c.write_ticks.Write(neighbor,16,mode=="spread_newer" ? 9 : 7);
         if (mode!="spread_hole")
             c.resident_ranges.Add({{block+6,block+7},vk::DeviceMemory{m2},2});
+        if (mode=="spread_inflight") {
+            const VAddr newer = base + 0x28000;
+            c.tracker.ranges.emplace_back(newer,16);
+            c.gpu_modified_ranges.Add(newer,16);
+            c.write_ticks.Write(newer,16,9);
+            auto r = c.StartDeferredReadback(base+0x3ff0,4);
+            assert(r && r->mapped && r->tick==7 && !r->Done());
+            assert(c.StartDeferredReadback(neighbor,4)==r);
+            assert(c.gpu_modified_ranges.Intersects(newer,16));
+            c.scheduler.sem.completed=7;
+            assert(c.FinishDeferredReadback(*r,false));
+            assert(c.mem.published.contains(neighbor) && !c.mem.published.contains(newer));
+            assert(c.scheduler.flushes==0 && c.runtime.copies==0);
+            return 0;
+        }
         c.scheduler.sem.completed=7;
         auto r=c.StartDeferredReadback(base+0x3ff0,4);
         assert(r && r->mapped && r->Done());
