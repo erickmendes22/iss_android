@@ -19,7 +19,7 @@ class RelaxedWriteMerge(unittest.TestCase):
             exe = Path(temp) / 'test'
             src.write_text(source)
             args = [CXX, '-std=c++20', '-O1', '-pthread', '-fsanitize=undefined',
-                    '-fno-sanitize-recover=all']
+                    '-fno-sanitize-recover=all', '-I', str(ROOT/'port/gpu/shim')]
             if bionic:
                 args += ['-D__ANDROID__', '-DISS_ANDROID_BIONIC']
             compiled = subprocess.run(args + [str(src), '-o', str(exe)], capture_output=True, text=True)
@@ -35,7 +35,7 @@ class RelaxedWriteMerge(unittest.TestCase):
         fixture = fixture.replace('// PRODUCTION_MERGE_METHODS', '\n'.join(method(source, signature) for signature in [
             'bool BufferCache::CpuWriteMergeRelaxed(', 'bool BufferCache::CpuWriteMerge(',
             'void BufferCache::AddMergedWriteRange(', 'void BufferCache::FlushMergedWrites(']))
-        self.run_source(fixture, ['copy','fill','snapshot','image','hostcopy','split','many','atomic',
+        self.run_source(fixture, ['short','copy','fill','snapshot','image','hostcopy','split','many','atomic',
                                  'failure','off','globaloff','cpuonly','dma','large','overlap','overflow','precise'])
         self.run_source(fixture, ['nonbionic'], bionic=False)
 

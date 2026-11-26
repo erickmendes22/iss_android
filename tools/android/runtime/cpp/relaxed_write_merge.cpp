@@ -1,4 +1,5 @@
 // Production CPU merge and upload, with a serialized owner and byte-accurate GPU model.
+#include "iss_session.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -107,6 +108,20 @@ int main(int argc,char** argv){
     Queue q;VideoCore::Memory memory{&q};memory.bytes.fill(7);
     VideoCore::BufferCache c{&q,&memory};VideoCore::Buffer gpu;gpu.gpu.fill(42);
     std::array<u8,128>source;source.fill(77);
+    if (mode=="short") {
+        assert(!c.CpuWriteMerge(0x1040,source.data(),0,15));
+        for (unsigned len=16; len<64; ++len) {
+            gpu.gpu.fill(42);
+            assert(c.CpuWriteMerge(0x1040,source.data(),0,len));
+            q.SendCommand<true,true>([&]{c.FlushMergedWrites(&gpu,0x1000,4096);});
+            for(unsigned i=0;i<4096;++i)
+                assert(gpu.gpu[i]==(i>=64 && i<64+len ? 77 : 42));
+        }
+        memory.fail=true;
+        assert(!c.CpuWriteMerge(0x1040,source.data(),0,16));
+        assert(IssSession::small_merged==48 && IssSession::small_fallback==1);
+        return 0;
+    }
     if(mode=="cpuonly")c.tracker.gpu=false;
     if(mode=="dma")EmulatorSettings.dma=true;
     if(mode=="failure")memory.fail=true;
