@@ -88,6 +88,7 @@ struct Semaphore {
     void Wait(u64 tick){assert(tick<10000);waited=tick;completed=std::max(completed,tick);}
 };
 struct Scheduler {
+    IssReadCost::FeedbackSubmit feedback_submit;
     Semaphore sem;u64 current=10;unsigned flushes=0;
     bool host_read_barrier=false,complete_on_flush=false;
     vk::PipelineStageFlags2 host_read_src_stages{};vk::AccessFlags2 host_read_src_access{};

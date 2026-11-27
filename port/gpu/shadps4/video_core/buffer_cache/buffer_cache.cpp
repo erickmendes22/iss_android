@@ -422,7 +422,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 if (!is_write && readback && readback->mapped && readback->tick == open_tick &&
                     RegionManager::HybridReadProtectionEnabled()) {
                     scheduler.feedback_submit.NoteForced(open_tick, open_work);
-                    scheduler.feedback_submit.Arm(open_tick + 1);
+                    scheduler.feedback_submit.WatchPage(device_addr);
+                } else if (!is_write && readback && readback->mapped && readback->tick < open_tick) {
+                    scheduler.feedback_submit.NoteSubmittedRead(readback->tick);
                 }
                 if (sample && readback) {
                     submission = scheduler.ReadbackSubmission(readback->tick);
@@ -1300,6 +1302,9 @@ bool BufferCache::MappedReadbackPolicy() {
 }
 
 void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
+#ifdef ISS_ANDROID_BIONIC
+    scheduler.feedback_submit.NoteWrite(address, size, tick);
+#endif
     // Staged snapshots only need notifications while a copy is pending.
     // The per-page tick tree is queried exclusively by the mapped path.
     if (mapped_readbacks_enabled && !write_ticks.Write(address, size, tick)) return;
