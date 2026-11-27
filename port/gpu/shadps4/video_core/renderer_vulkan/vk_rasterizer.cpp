@@ -1655,11 +1655,23 @@ void Rasterizer::SubmitIfWorkPiledUp(const RenderState& next_state) {
     }();
     // Do not cut a batch immediately before the existing draw-limit submission:
     // that would add an empty second command buffer instead of parallel work.
-    if ((limit == 0 || scheduler.WorkSinceSubmit() < limit) &&
+    const auto work = scheduler.WorkSinceSubmit();
+    bool early = false;
+#ifdef ISS_ANDROID_BIONIC
+    if (limit && work < limit && work >= std::max(256u, limit / 2) &&
+        IssSession::hybrid_reads.load(std::memory_order_relaxed) &&
+        scheduler.WillBeginRendering(next_state) &&
+        !Pipeline::deferred_binds.load(std::memory_order_relaxed) &&
+        !FrameRecord::IsRecording() && !FrameCapture::Active()) {
+        early = scheduler.feedback_submit.AtBoundary(scheduler.CurrentTick(), work, limit,
+            [&](u64 prior) { return scheduler.IsFree(prior); });
+    }
+#endif
+    if (!early && (limit == 0 || work < limit) &&
         !FrameRecord::IsRecording() && !FrameCapture::Active()) {
         scheduler.SplitRecordingAtBoundary(next_state);
     }
-    if (limit == 0 || scheduler.WorkSinceSubmit() < limit ||
+    if ((!early && (limit == 0 || work < limit)) ||
         !scheduler.WillBeginRendering(next_state)) {
         return;
     }

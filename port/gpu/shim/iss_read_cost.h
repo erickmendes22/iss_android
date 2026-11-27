@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <array>
+#include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <mutex>
@@ -126,7 +128,36 @@ inline void Commit(const Totals& s, unsigned long long total) {
     window.copies += s.copies;
     for (unsigned i=0; i<PhaseCount; ++i) window.ns[i] += s.ns[i];
 }
+inline std::atomic<unsigned long long> forced_reads{}, early_submits{}, busy_skips{};
+
+// Only the immediately following batch gets an opportunity. Work is counted
+// by the scheduler in draws and dispatches. A normal submission expires it.
+class FeedbackSubmit {
+    std::atomic<unsigned long long> armed_tick{};
+public:
+    void Arm(unsigned long long tick) {
+        armed_tick.store(tick, std::memory_order_relaxed);
+        forced_reads.fetch_add(1, std::memory_order_relaxed);
+    }
+    template<class PreviousDone>
+    bool AtBoundary(unsigned long long tick, unsigned work, unsigned normal_limit,
+                    PreviousDone previous_done) {
+        if (!normal_limit || work >= normal_limit ||
+            work < std::max(256u, normal_limit / 2)) return false;
+        auto expected = tick;
+        if (!tick || !armed_tick.compare_exchange_strong(expected, 0, std::memory_order_relaxed))
+            return false;
+        if (!previous_done(tick-1)) {
+            busy_skips.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        early_submits.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+};
 inline void Report(unsigned frames) {
+    std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu prior_busy=%llu\n",
+                forced_reads.exchange(0), early_submits.exchange(0), busy_skips.exchange(0));
     Totals w;
     { std::scoped_lock guard{lock}; w = window; window = {}; }
     const double scale = 32.0 / (1e6 * frames);

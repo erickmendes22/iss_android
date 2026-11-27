@@ -1033,6 +1033,7 @@ public:
 
     /// Returns the scheduler timeline semaphore.
 #ifdef ISS_ANDROID_BIONIC
+    IssReadCost::FeedbackSubmit feedback_submit;
     IssReadCost::Submission ReadbackSubmission(u64 tick) { return readback_submissions.Find(tick, work_semaphore.KnownGpuTick()); }
 #endif
     [[nodiscard]] Semaphore* GetWorkSemaphore() noexcept {

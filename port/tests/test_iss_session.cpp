@@ -29,6 +29,18 @@ int main() {
     assert(IssReadCost::window.ns[IssReadCost::Queue] >= 2000000);
     assert(IssReadCost::window.requests == 1 && IssReadCost::window.ready == 1);
     using namespace IssReadCost;
+    FeedbackSubmit policy;
+    unsigned queries=0;
+    auto idle=[&](auto tick){ ++queries;return tick==4; };
+    policy.Arm(5);
+    assert(!policy.AtBoundary(5,511,1024,idle) && !queries);
+    assert(policy.AtBoundary(5,512,1024,idle) && queries==1);
+    assert(!policy.AtBoundary(5,768,1024,idle) && queries==1);
+    policy.Arm(6);
+    assert(!policy.AtBoundary(6,600,1024,idle) && queries==2);
+    policy.Arm(7);
+    assert(!policy.AtBoundary(8,700,1024,idle) && queries==2);
+    assert(!policy.AtBoundary(7,1024,1024,idle) && queries==2);
     SubmissionHistory history;
     history.Record(3, 12, 2);
     history.Record(4, 9, 3);
