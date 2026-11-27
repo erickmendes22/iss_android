@@ -130,12 +130,40 @@ inline void Commit(const Totals& s, unsigned long long total) {
 }
 inline std::atomic<unsigned long long> forced_reads{}, early_submits{}, backlog_skips{};
 
+// Rows describe the open producer at a forced read. Columns describe the
+// last safe pass boundary in that same batch, before the read forced a flush.
+constexpr unsigned WorkBin(unsigned work) {
+    return work < 128 ? 0 : work < 256 ? 1 : work < 512 ? 2 : 3;
+}
+struct FaultWindow {
+    std::array<std::array<unsigned long long, 5>, 4> counts{};
+    unsigned long long operations{}, armed{}, backlog{};
+};
+inline FaultWindow faults;
+inline std::mutex fault_lock;
+
 // Only the immediately following batch gets an opportunity. Work is counted
 // by the scheduler in draws and dispatches. A normal submission expires it.
 class FeedbackSubmit {
     std::atomic<unsigned long long> armed_tick{};
+    // Only accessed by the GPU command owner.
+    unsigned long long boundary_tick{}, last_armed{}, last_backlog{};
+    unsigned boundary_work{};
 public:
+    void NoteBoundary(unsigned long long tick, unsigned work) {
+        boundary_tick = tick;
+        boundary_work = work;
+    }
+    void NoteForced(unsigned long long tick, unsigned work) {
+        std::scoped_lock guard{fault_lock};
+        const unsigned column = tick == boundary_tick ? 1 + WorkBin(boundary_work) : 0;
+        ++faults.counts[WorkBin(work)][column];
+        faults.operations += work;
+        faults.armed += tick == last_armed;
+        faults.backlog += tick == last_backlog;
+    }
     void Arm(unsigned long long tick) {
+        last_armed = tick;
         armed_tick.store(tick, std::memory_order_relaxed);
         forced_reads.fetch_add(1, std::memory_order_relaxed);
     }
@@ -149,6 +177,7 @@ public:
             return false;
         // Queue behind one in-flight submission without growing a deeper backlog.
         if (tick > 2 && !previous_done(tick - 2)) {
+            last_backlog = tick;
             backlog_skips.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -159,6 +188,17 @@ public:
 inline void Report(unsigned frames) {
     std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu backlog_skip=%llu\n",
                 forced_reads.exchange(0), early_submits.exchange(0), backlog_skips.exchange(0));
+    FaultWindow snapshot;
+    { std::scoped_lock guard{fault_lock}; snapshot = faults; faults = {}; }
+    constexpr std::array bins{"0_127", "128_255", "256_511", "512_plus"};
+    std::printf("FORCED_READ_BATCH work_sum=%llu armed=%llu backlog_rejected=%llu\n",
+                snapshot.operations, snapshot.armed, snapshot.backlog);
+    for (unsigned bin = 0; bin < bins.size(); ++bin) {
+        const auto& row = snapshot.counts[bin];
+        std::printf("FORCED_READ_BOUNDARY work=%s none=%llu safe_0_127=%llu "
+                    "safe_128_255=%llu safe_256_511=%llu safe_512_plus=%llu\n",
+                    bins[bin], row[0], row[1], row[2], row[3], row[4]);
+    }
     Totals w;
     { std::scoped_lock guard{lock}; w = window; window = {}; }
     const double scale = 32.0 / (1e6 * frames);

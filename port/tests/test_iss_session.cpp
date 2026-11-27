@@ -31,7 +31,7 @@ int main() {
     using namespace IssReadCost;
     FeedbackSubmit policy;
     unsigned queries=0;
-    auto idle=[&](auto tick){ ++queries;return tick==4; };
+    auto idle=[&](auto tick){ ++queries;return tick==3; };
     policy.Arm(5);
     assert(!policy.AtBoundary(5,511,1024,idle) && !queries);
     assert(policy.AtBoundary(5,512,1024,idle) && queries==1);
@@ -41,6 +41,14 @@ int main() {
     policy.Arm(7);
     assert(!policy.AtBoundary(8,700,1024,idle) && queries==2);
     assert(!policy.AtBoundary(7,1024,1024,idle) && queries==2);
+    policy.NoteBoundary(7, 240);
+    policy.NoteBoundary(7, 300);
+    policy.NoteForced(7, 510);
+    policy.NoteForced(8, 600);
+    policy.NoteForced(6, 900);
+    assert(faults.counts[2][3] == 1 && faults.counts[3][0] == 2);
+    assert(faults.operations == 2010 && faults.armed == 1 && faults.backlog == 1);
+    assert(WorkBin(127)==0 && WorkBin(128)==1 && WorkBin(256)==2 && WorkBin(512)==3);
     SubmissionHistory history;
     history.Record(3, 12, 2);
     history.Record(4, 9, 3);

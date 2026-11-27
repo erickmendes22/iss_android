@@ -1658,12 +1658,14 @@ void Rasterizer::SubmitIfWorkPiledUp(const RenderState& next_state) {
     const auto work = scheduler.WorkSinceSubmit();
     bool early = false;
 #ifdef ISS_ANDROID_BIONIC
-    if (limit && work < limit && work >= std::max(256u, limit / 2) &&
+    if (limit && work < limit &&
         IssSession::hybrid_reads.load(std::memory_order_relaxed) &&
         scheduler.WillBeginRendering(next_state) &&
         !Pipeline::deferred_binds.load(std::memory_order_relaxed) &&
         !FrameRecord::IsRecording() && !FrameCapture::Active()) {
-        early = scheduler.feedback_submit.AtBoundary(scheduler.CurrentTick(), work, limit,
+        const auto tick = scheduler.CurrentTick();
+        scheduler.feedback_submit.NoteBoundary(tick, work);
+        early = scheduler.feedback_submit.AtBoundary(tick, work, limit,
             [&](u64 prior) { return scheduler.IsFree(prior); });
     }
 #endif

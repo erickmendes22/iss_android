@@ -30,6 +30,8 @@ PREAMBLE = r'''
 #include <string>
 #include <vector>
 #include "iss_bionic_perf.h"
+#include "iss_read_cost.h"
+namespace IssSession { inline std::atomic<bool> hybrid_reads{true}; }
 #include "vk_wait_diagnostics.h"
 using u64=uint64_t;
 using u32=uint32_t;
@@ -45,7 +47,9 @@ struct TimelineSemaphoreSubmitInfo {
     unsigned waitSemaphoreValueCount; const u64* pWaitSemaphoreValues;
     unsigned signalSemaphoreValueCount; const u64* pSignalSemaphoreValues;
 };
-struct CommandBuffer { Result end() {return Result::eSuccess;} };
+enum class PipelineStageFlagBits2 { eAllCommands };
+struct CommandBuffer { void writeTimestamp2(PipelineStageFlagBits2, int, unsigned) {}
+    Result end() {return Result::eSuccess;} };
 struct SubmitInfo {
     const TimelineSemaphoreSubmitInfo* pNext;
     unsigned waitSemaphoreCount; const Semaphore* pWaitSemaphores;
@@ -123,6 +127,10 @@ struct Scheduler {
     struct Op {std::function<void()> callback;u64 gpu_tick;};
     std::queue<Op> pending_ops;
     std::function<void(SubmitInfo&)> on_submit;
+    std::atomic<unsigned> dispatches_since_submit{};
+    IssReadCost::SubmissionHistory readback_submissions;
+    int* session_queries{};
+    static constexpr unsigned SessionQueryPairs = 16;
     vk::CommandBuffer current_cmdbuf;
     explicit Scheduler(const Instance& i):instance{i},work_semaphore{i} {}
     void EndRendering() {}

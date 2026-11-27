@@ -414,12 +414,14 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 if (sample) ++sample->requests;
                 if (prepare_once()) return;
 #ifdef ISS_ANDROID_BIONIC
+                const auto open_work = !is_write ? scheduler.WorkSinceSubmit() : 0;
                 const auto open_tick = (sample || !is_write) ? scheduler.CurrentTick() : 0;
 #endif
                 readback = StartDeferredReadback(device_addr, size);
 #ifdef ISS_ANDROID_BIONIC
                 if (!is_write && readback && readback->mapped && readback->tick == open_tick &&
                     RegionManager::HybridReadProtectionEnabled()) {
+                    scheduler.feedback_submit.NoteForced(open_tick, open_work);
                     scheduler.feedback_submit.Arm(open_tick + 1);
                 }
                 if (sample && readback) {
