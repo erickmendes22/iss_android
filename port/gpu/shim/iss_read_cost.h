@@ -142,17 +142,13 @@ struct FaultWindow {
 inline FaultWindow faults;
 inline std::mutex fault_lock;
 
-// Follow the last demanded page across submissions until one boundary is tried.
-// A normal submission can retire a producer before its next eligible boundary.
-inline std::atomic<unsigned long long> producer_matches{}, reads_from_early{};
+// Only the immediately following batch gets an opportunity. Work is counted
+// by the scheduler in draws and dispatches. A normal submission expires it.
 class FeedbackSubmit {
     std::atomic<unsigned long long> armed_tick{};
     // Only accessed by the GPU command owner.
     unsigned long long boundary_tick{}, last_armed{}, last_backlog{};
     unsigned boundary_work{};
-    std::array<unsigned long long, 64> early_ticks{};
-    std::atomic<unsigned long long> watched_page{}; // page number plus one
-
 public:
     void NoteBoundary(unsigned long long tick, unsigned work) {
         boundary_tick = tick;
@@ -166,24 +162,10 @@ public:
         faults.armed += tick == last_armed;
         faults.backlog += tick == last_backlog;
     }
-    void WatchPage(unsigned long long address) {
-        armed_tick.store(0, std::memory_order_relaxed);
-        watched_page.store((address >> 12) + 1, std::memory_order_relaxed);
-        forced_reads.fetch_add(1, std::memory_order_relaxed);
-    }
-    void NoteWrite(unsigned long long address, unsigned long long size, unsigned long long tick) {
-        const auto page = watched_page.load(std::memory_order_relaxed);
-        if (!page || !size || page - 1 < (address >> 12)) return;
-        const auto start = (page - 1) << 12;
-        if (start > address && start - address >= size) return;
-        if (last_armed == tick && armed_tick.load(std::memory_order_relaxed) == tick) return;
-        producer_matches.fetch_add(1, std::memory_order_relaxed);
+    void Arm(unsigned long long tick) {
         last_armed = tick;
         armed_tick.store(tick, std::memory_order_relaxed);
-    }
-    void NoteSubmittedRead(unsigned long long tick) {
-        if (tick && early_ticks[tick % early_ticks.size()] == tick)
-            reads_from_early.fetch_add(1, std::memory_order_relaxed);
+        forced_reads.fetch_add(1, std::memory_order_relaxed);
     }
     template<class PreviousDone>
     bool AtBoundary(unsigned long long tick, unsigned work, unsigned normal_limit,
@@ -193,14 +175,12 @@ public:
         auto expected = tick;
         if (!tick || !armed_tick.compare_exchange_strong(expected, 0, std::memory_order_relaxed))
             return false;
-        watched_page.store(0, std::memory_order_relaxed);
         // Queue behind one in-flight submission without growing a deeper backlog.
         if (tick > 2 && !previous_done(tick - 2)) {
             last_backlog = tick;
             backlog_skips.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        early_ticks[tick % early_ticks.size()] = tick;
         early_submits.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -208,8 +188,6 @@ public:
 inline void Report(unsigned frames) {
     std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu backlog_skip=%llu\n",
                 forced_reads.exchange(0), early_submits.exchange(0), backlog_skips.exchange(0));
-    std::printf("FEEDBACK_PAGE matched_batches=%llu reads_from_early=%llu\n",
-                producer_matches.exchange(0), reads_from_early.exchange(0));
     FaultWindow snapshot;
     { std::scoped_lock guard{fault_lock}; snapshot = faults; faults = {}; }
     constexpr std::array bins{"0_127", "128_255", "256_511", "512_plus"};

@@ -33,7 +33,7 @@ struct Settings {
 struct Stats {
     std::atomic<u64> mixed_pages_skipped{},wide_attempts{},wide_neighbors{},mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
         mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
-        mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
+        direct_publications{},snapshot_allocation_avoided{},mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
 Stats& Readbacks(){static Stats s;return s;}
 bool ReadbackStatsEnabled(){return true;}
@@ -88,7 +88,6 @@ struct Semaphore {
     void Wait(u64 tick){assert(tick<10000);waited=tick;completed=std::max(completed,tick);}
 };
 struct Scheduler {
-    IssReadCost::FeedbackSubmit feedback_submit;
     Semaphore sem;u64 current=10;unsigned flushes=0;
     bool host_read_barrier=false,complete_on_flush=false;
     vk::PipelineStageFlags2 host_read_src_stages{};vk::AccessFlags2 host_read_src_access{};
@@ -294,8 +293,19 @@ int main(int argc,char** argv) {
     c.resident_ranges.Add({{block,block+1},vk::DeviceMemory{m1},2});
     if(mode!="hole")c.resident_ranges.Add({{block+1,block+2},vk::DeviceMemory{m2},1});
     c.tracker.ranges={{base+0x3ff0,32},{base+0x4100,16}};
+    if(mode=="direct")c.tracker.ranges={{base+0x3010,16},{base+0x4210,24}};
     if(mode=="partial_gap")c.tracker.ranges={{base+0x3000,3*4096}};
     for(auto [a,n]:c.tracker.ranges){c.gpu_modified_ranges.Add(a,n);c.write_ticks.Write(a,n,7);}
+    if(mode=="direct") {
+        auto r=c.StartDeferredReadback(base+0x3010,4);
+        assert(r && r->mapped && c.mem.published.empty());
+        assert(!c.CaptureMappedReadback(*r));
+        assert(c.FinishDeferredReadback(*r,true));
+        assert(r->direct_publication && r->mapped_snapshot.empty() && c.mem.published.size()==40);
+        for (unsigned i=0;i<16;++i) assert(c.mem.published.at(base+0x3010+i)==device_memory[m1][32768+0x3010+i]);
+        for (unsigned i=0;i<24;++i) assert(c.mem.published.at(base+0x4210+i)==device_memory[m2][16384+0x210+i]);
+        return 0;
+    }
     if(mode.starts_with("spread")) {
         const VAddr neighbor = base + 0x18000;
         c.tracker.ranges.emplace_back(neighbor,16);

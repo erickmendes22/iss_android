@@ -37,7 +37,7 @@ struct {GpuReadbacksMode mode=GpuReadbacksMode::Relaxed;
     auto GetReadbacksMode() {return mode;}} EmulatorSettings;
 namespace TlgToggle {enum {DeferredReadback}; bool Disabled(int) {return false;}}
 bool ReadbackStatsEnabled() {return false;} s64 NowNs() {return 0;}
-struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},deferred_retries{},retry_applied{};};
+struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},direct_publications{},snapshot_allocation_avoided{},mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},deferred_retries{},retry_applied{};};
 Counters& Readbacks() {static Counters c;return c;} void ReportReadbacks() {}
 struct Queue {
     std::mutex mutex;std::condition_variable cv;
@@ -112,6 +112,7 @@ struct Buffer {};
 struct BufferCache {
     struct Copy {u64 srcOffset=0,dstOffset=0,size=16;};
     struct DeferredReadback {
+        struct Span {const u8* source;};std::vector<Span> mapped_spans;bool direct_publication=false;
         bool mapped=false,page_scoped=false,partial=false;u64 snapshot_size=0;std::vector<u8> mapped_snapshot;
         std::array<u8,16> snapshot;
         struct Staging {u8* mapped;u64 offset=0;void Invalidate() {}} staging;

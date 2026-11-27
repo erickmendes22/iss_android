@@ -240,6 +240,7 @@ private:
             const u8* source;
         };
         bool mapped = false;
+        bool direct_publication = false;
         // Native Relaxed mapping: GPU writes invalidate individual 4-KiB pages.
         // The owner alone mutates these fields; applied's release/acquire publishes partial.
         bool page_scoped = false, partial = false;

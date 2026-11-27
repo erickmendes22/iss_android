@@ -229,6 +229,7 @@ struct ReadbackStats {
     std::atomic<u64> mapped_scheduled{0}, mapped_applied{0}, mapped_bytes{0},
         mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0},
         mapped_submitted{0};
+    std::atomic<u64> direct_publications{}, snapshot_allocation_avoided{};
     std::atomic<u64> mapped_partial{0}, mapped_partial_kept{0}, mapped_partial_retry{0};
     std::atomic<u64> mapped_prefetch_narrowed{0}, mapped_wider_wait_bypassed{0},
         mapped_coherent_skipped{0};
@@ -285,6 +286,9 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_current.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_unavailable.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_stale.exchange(0)));
+    std::printf("  hybrid direct publication: %llu completions, %llu snapshot allocation bytes avoided\n",
+                static_cast<unsigned long long>(r.direct_publications.exchange(0)),
+                static_cast<unsigned long long>(r.snapshot_allocation_avoided.exchange(0)));
     std::printf("  mapped ready on owner: %llu published without guest wait/publication round trip\n",
                 static_cast<unsigned long long>(r.mapped_inline.exchange(0)));
     std::printf("  mapped current submitted: %llu without a staging copy; deferred retries: "
@@ -422,9 +426,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 if (!is_write && readback && readback->mapped && readback->tick == open_tick &&
                     RegionManager::HybridReadProtectionEnabled()) {
                     scheduler.feedback_submit.NoteForced(open_tick, open_work);
-                    scheduler.feedback_submit.WatchPage(device_addr);
-                } else if (!is_write && readback && readback->mapped && readback->tick < open_tick) {
-                    scheduler.feedback_submit.NoteSubmittedRead(readback->tick);
+                    scheduler.feedback_submit.Arm(open_tick + 1);
                 }
                 if (sample && readback) {
                     submission = scheduler.ReadbackSubmission(readback->tick);
@@ -1302,9 +1304,6 @@ bool BufferCache::MappedReadbackPolicy() {
 }
 
 void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
-#ifdef ISS_ANDROID_BIONIC
-    scheduler.feedback_submit.NoteWrite(address, size, tick);
-#endif
     // Staged snapshots only need notifications while a copy is pending.
     // The per-page tick tree is queried exclusively by the mapped path.
     if (mapped_readbacks_enabled && !write_ticks.Write(address, size, tick)) return;
@@ -1426,6 +1425,22 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
         !scheduler.GetWorkSemaphore()->IsFree(readback.tick)) return false;
     readback.publication_copies.clear();
     readback.retry_copies.clear();
+    // On the cache owner the mappings stay resident throughout publication.
+    // Validate the whole envelope once. An unrelated newer page can only
+    // send this read through the existing per-copy validation path.
+    readback.direct_publication = RegionManager::HybridReadProtectionEnabled() &&
+        residency_coherent && !readback.copies.empty() &&
+        readback.copies.size() == readback.mapped_spans.size() &&
+        !readback.invalid_pages.Overlaps(readback.start, readback.end) &&
+        write_ticks.Latest(readback.start, readback.end - readback.start) <= readback.tick &&
+        std::equal(readback.copies.begin(), readback.copies.end(), readback.mapped_spans.begin(),
+                   [](const auto& copy, const auto& span) {
+                       return span.destination == copy.dstOffset && span.size == copy.size;
+                   });
+    if (readback.direct_publication) {
+        readback.partial = false;
+        return true;
+    }
     for (const auto& copy : readback.copies) {
         const VAddr start = readback.arena_base + copy.srcOffset, end = start + copy.size;
         const bool changed = readback.invalid_pages.Overlaps(start, end) ||
@@ -1771,7 +1786,8 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
     // Apply/unprotect only pages that were actually copied, never the entire window.
     // Copies on the same page are grouped: unmarking the page after the first copy
     // would otherwise prevent the remaining copies from being published.
-    const auto& copies = readback.mapped ? readback.publication_copies : readback.copies;
+    const auto& copies = readback.mapped && !readback.direct_publication
+                             ? readback.publication_copies : readback.copies;
     bool applied = true;
     ForEachReadbackCopyPageGroup(
         readback.arena_base, copies,
@@ -1793,8 +1809,10 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
                         const VAddr lo = std::max<VAddr>(copy_start, write_start);
                         const VAddr hi = std::min<VAddr>(copy_start + copy.size, write_end);
                         if (lo < hi) {
+                            const auto* source = readback.direct_publication
+                                ? readback.mapped_spans[i].source : mapped + copy.dstOffset;
                             memory->TryWriteBacking(reinterpret_cast<void*>(lo),
-                                mapped + copy.dstOffset + (lo - copy_start), hi - lo);
+                                source + (lo - copy_start), hi - lo);
                         }
                     }
                 });
@@ -1817,6 +1835,10 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
     }
     readback.applied.store(true, std::memory_order_release);
     if (readback.mapped && ReadbackStatsEnabled()) {
+        if (readback.direct_publication) {
+            Readbacks().direct_publications.fetch_add(1);
+            Readbacks().snapshot_allocation_avoided.fetch_add(readback.snapshot_size);
+        }
         Readbacks().mapped_applied.fetch_add(1);
         Readbacks().mapped_bytes.fetch_add(readback.snapshot_size);
     }
