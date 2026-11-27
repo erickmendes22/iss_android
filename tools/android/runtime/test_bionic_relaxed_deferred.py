@@ -71,6 +71,7 @@ struct Queue {
 struct Semaphore {
     std::mutex mutex;std::condition_variable cv;u64 complete_tick=0;unsigned waiters=0;
     Queue* queue;
+    bool IsFree(u64 tick){std::lock_guard lock(mutex);return complete_tick>=tick;}
     void Wait(u64 tick) {
         assert(tick==1 || tick==2);assert(std::this_thread::get_id()!=queue->owner);
         std::unique_lock lock(mutex);++waiters;cv.notify_all();
@@ -82,7 +83,7 @@ struct Semaphore {
     }
     void Complete(u64 tick=1) {std::lock_guard lock(mutex);complete_tick=std::max(complete_tick,tick);cv.notify_all();}
 };
-struct Scheduler {Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
+struct Scheduler {u64 CurrentTick(){return 1;} IssReadCost::Submission ReadbackSubmission(u64){return {};} Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
 struct Tracker {
     Queue* queue;std::mutex mutex;bool gpu=true,cpu=false;unsigned marks=0;
     bool IsRegionGpuModified(VAddr,u64){std::lock_guard lock(mutex);return gpu;}

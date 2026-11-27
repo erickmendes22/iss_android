@@ -28,7 +28,7 @@ class ReadFaultSample {
 public:
     explicit ReadFaultSample(bool guest_thread) : bind(nullptr) {
         static thread_local unsigned sequence = 0;
-        if (guest_thread && (sequence++ % 32 == 0)) { start = Clock::now(); IssReadCost::active = &costs; }
+        if (guest_thread && (sequence++ % 32 == 0)) { start = costs.fault_start = Clock::now(); IssReadCost::active = &costs; }
     }
     ~ReadFaultSample() {
         if (start == Clock::time_point{}) return;

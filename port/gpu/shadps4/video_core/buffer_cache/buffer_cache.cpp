@@ -402,6 +402,10 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         for (unsigned attempt = 0; attempt < max_attempts; ++attempt) {
             if (attempt && queued_at) Readbacks().deferred_retries.fetch_add(1);
             std::shared_ptr<DeferredReadback> readback;
+#ifdef ISS_ANDROID_BIONIC
+            IssReadCost::Submission submission{};
+            IssReadCost::Origin origin = IssReadCost::Origin::Unknown;
+#endif
             const auto enqueued = IssReadCost::Now(sample);
             liverpool->SendCommand<true, true>([&] {
                 IssReadCost::Add(sample, IssReadCost::Queue, enqueued);
@@ -409,7 +413,16 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 IssReadCost::Timer timer{IssReadCost::Owner};
                 if (sample) ++sample->requests;
                 if (prepare_once()) return;
+#ifdef ISS_ANDROID_BIONIC
+                const auto open_tick = sample ? scheduler.CurrentTick() : 0;
+#endif
                 readback = StartDeferredReadback(device_addr, size);
+#ifdef ISS_ANDROID_BIONIC
+                if (sample && readback) {
+                    submission = scheduler.ReadbackSubmission(readback->tick);
+                    origin = IssReadCost::Classify(readback->mapped, readback->tick, open_tick);
+                }
+#endif
                 if (sample && readback && readback->applied.load(std::memory_order_acquire)) ++sample->ready;
                 if (!readback && is_write) {
                     // Nothing to copy back, as when DownloadMemory finds nothing.
@@ -436,7 +449,15 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                             readback->recovered.load(std::memory_order_acquire)) return;
                         {
                             IssReadCost::Timer timer{IssReadCost::GpuWait};
-                            scheduler.GetWorkSemaphore()->Wait(readback->tick);
+#ifdef ISS_ANDROID_BIONIC
+                            if (sample) {
+                                IssReadCost::MeasureWait(*sample, *scheduler.GetWorkSemaphore(),
+                                                         readback->tick, origin, submission);
+                            } else
+#endif
+                            {
+                                scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                            }
                         }
                         if (readback->stale.load(std::memory_order_acquire) ||
                             readback->recovered.load(std::memory_order_acquire)) return;

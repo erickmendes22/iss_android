@@ -782,7 +782,12 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         work_semaphore.Wait(signal_value - MaxInFlightSubmissions);
     }
 #endif
+#ifdef ISS_ANDROID_BIONIC
+    const u32 dispatches = dispatches_since_submit.exchange(0, std::memory_order_relaxed);
+    const u32 submission_work = work_since_submit.exchange(0, std::memory_order_relaxed);
+#else
     work_since_submit.store(0, std::memory_order_relaxed);
+#endif
 
 #if TRACY_GPU_ENABLED
     auto* profiler_ctx = instance.GetProfilerContext();
@@ -844,6 +849,10 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         const IssBionicPerf::Scope driver_timer{IssBionicPerf::Stage::DriverSubmit};
         submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
     }
+#ifdef ISS_ANDROID_BIONIC
+    if (submit_result == vk::Result::eSuccess && IssSession::hybrid_reads.load(std::memory_order_relaxed))
+        readback_submissions.Record(signal_value, submission_work, dispatches);
+#endif
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
 #ifndef ISS_ANDROID_BIONIC

@@ -1758,7 +1758,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         }
     });
     DebugState.IncDispatch();
-    scheduler.CountWork();
+    scheduler.CountWork(true);
 
     // tlg diagnostics: TLG_DIAG_IMAGES=1 writes the images a dispatch read and wrote, after
     // it, while a frame capture records (TLG_CAPTURE_TRIGGER).
@@ -1840,7 +1840,7 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
         }
     });
     DebugState.IncDispatch();
-    scheduler.CountWork();
+    scheduler.CountWork(true);
 
     ResetBindings(true);
     scheduler.KickRecording();

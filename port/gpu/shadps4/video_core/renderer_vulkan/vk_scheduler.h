@@ -19,6 +19,9 @@
 #include <queue>
 
 #include "tlg_toggles.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "iss_read_cost.h"
+#endif
 #include "common/assert.h"
 #include "common/interval_set.h"
 #include "common/unique_function.h"
@@ -994,7 +997,10 @@ public:
     }
 
     /// tlg: counts a draw or dispatch recorded since the last submission.
-    void CountWork() noexcept {
+    void CountWork([[maybe_unused]] bool dispatch = false) noexcept {
+#ifdef ISS_ANDROID_BIONIC
+        if (dispatch) dispatches_since_submit.fetch_add(1, std::memory_order_relaxed);
+#endif
         work_since_submit.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1026,6 +1032,9 @@ public:
     }
 
     /// Returns the scheduler timeline semaphore.
+#ifdef ISS_ANDROID_BIONIC
+    IssReadCost::Submission ReadbackSubmission(u64 tick) { return readback_submissions.Find(tick, work_semaphore.KnownGpuTick()); }
+#endif
     [[nodiscard]] Semaphore* GetWorkSemaphore() noexcept {
         return &work_semaphore;
     }
@@ -1143,6 +1152,10 @@ private:
     bool recorder_busy = false;
     std::atomic<size_t> queued_chunks{0}; ///< recorder_queue.size() for lock-free polling
     bool recorder_sleeping = false; ///< waiting on recorder_cv (guarded by recorder_mutex)
+#ifdef ISS_ANDROID_BIONIC
+    IssReadCost::SubmissionHistory readback_submissions;
+    std::atomic<u32> dispatches_since_submit{};
+#endif
     std::atomic<u32> work_since_submit{0}; ///< tlg: CountWork(), reset by each submission
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
