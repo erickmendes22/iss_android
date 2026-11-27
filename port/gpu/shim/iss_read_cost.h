@@ -128,7 +128,7 @@ inline void Commit(const Totals& s, unsigned long long total) {
     window.copies += s.copies;
     for (unsigned i=0; i<PhaseCount; ++i) window.ns[i] += s.ns[i];
 }
-inline std::atomic<unsigned long long> forced_reads{}, early_submits{}, busy_skips{};
+inline std::atomic<unsigned long long> forced_reads{}, early_submits{}, backlog_skips{};
 
 // Only the immediately following batch gets an opportunity. Work is counted
 // by the scheduler in draws and dispatches. A normal submission expires it.
@@ -147,8 +147,9 @@ public:
         auto expected = tick;
         if (!tick || !armed_tick.compare_exchange_strong(expected, 0, std::memory_order_relaxed))
             return false;
-        if (!previous_done(tick-1)) {
-            busy_skips.fetch_add(1, std::memory_order_relaxed);
+        // Queue behind one in-flight submission without growing a deeper backlog.
+        if (tick > 2 && !previous_done(tick - 2)) {
+            backlog_skips.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
         early_submits.fetch_add(1, std::memory_order_relaxed);
@@ -156,8 +157,8 @@ public:
     }
 };
 inline void Report(unsigned frames) {
-    std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu prior_busy=%llu\n",
-                forced_reads.exchange(0), early_submits.exchange(0), busy_skips.exchange(0));
+    std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu backlog_skip=%llu\n",
+                forced_reads.exchange(0), early_submits.exchange(0), backlog_skips.exchange(0));
     Totals w;
     { std::scoped_lock guard{lock}; w = window; window = {}; }
     const double scale = 32.0 / (1e6 * frames);
