@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <chrono>
 #include "tlg_quality.h"
+#include "iss_read_cost.h"
 
 namespace IssSession {
 inline std::atomic<int32_t*> guest_level{nullptr};
@@ -22,14 +23,17 @@ inline std::atomic<uint64_t> read_fault_samples{0}, read_fault_ns{0};
 class ReadFaultSample {
     using Clock = std::chrono::steady_clock;
     Clock::time_point start{};
+    IssReadCost::Totals costs{};
+    IssReadCost::Bind bind;
 public:
-    explicit ReadFaultSample(bool guest_thread) {
+    explicit ReadFaultSample(bool guest_thread) : bind(nullptr) {
         static thread_local unsigned sequence = 0;
-        if (guest_thread && (sequence++ % 32 == 0)) start = Clock::now();
+        if (guest_thread && (sequence++ % 32 == 0)) { start = Clock::now(); IssReadCost::active = &costs; }
     }
     ~ReadFaultSample() {
         if (start == Clock::time_point{}) return;
         const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start);
+        IssReadCost::Commit(costs, ns.count());
         read_fault_ns.fetch_add(ns.count(), std::memory_order_relaxed);
         read_fault_samples.fetch_add(1, std::memory_order_relaxed);
     }
@@ -88,6 +92,7 @@ public:
                     p99, over33, over50, frames, frames * 1e9 / double(now - start));
         std::printf("SESSION_SETTINGS fps_limit=%d quality_target=%d quality_floor=%d supported=%d\n",
                     limit, target, level ? governor.Level() : 0, int(level != nullptr));
+        IssReadCost::Report(frames);
         const auto read_samples = read_fault_samples.exchange(0, std::memory_order_relaxed);
         const auto read_ns = read_fault_ns.exchange(0, std::memory_order_relaxed);
         std::printf("GUEST_READ_FAULTS sampled_1_in=32 samples=%llu sampled_ms=%.3f\n",

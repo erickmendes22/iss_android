@@ -78,7 +78,7 @@ int main() {
     def compile_run(self, code, flags, cases):
         with tempfile.TemporaryDirectory() as directory:
             source, binary = Path(directory) / "test.cpp", Path(directory) / "test"
-            source.write_text(code)
+            source.write_text((ROOT / "port/gpu/shim/iss_read_cost.h").read_text() + "\n" + code)
             result = subprocess.run([CXX, "-std=c++20", "-O1", "-pthread",
                 "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(GPU),
                 *flags, str(source), "-o", str(binary)], capture_output=True, text=True)

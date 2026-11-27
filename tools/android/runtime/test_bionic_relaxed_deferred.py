@@ -317,7 +317,7 @@ class RelaxedDeferredTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             src = Path(directory) / "readback.cpp"
             binary = Path(directory) / "readback"
-            src.write_text(PREAMBLE + bodies + MAIN)
+            src.write_text((ROOT / "port/gpu/shim/iss_read_cost.h").read_text() + "\n" + PREAMBLE + bodies + MAIN)
             flags = ["-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"] if bionic else []
             result = subprocess.run([CXX, "-std=c++20", "-O2", "-pthread", *flags,
                                      f"-DNATIVE_BIONIC={int(bionic)}", "-I",

@@ -4216,8 +4216,12 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
-    const bool image_readback =
-        texture_cache.ResolveReadbacks(addr, size, assume_locks, VideoCore::ReadbackSource::CpuRead);
+    const bool image_readback = [&] {
+#ifdef ISS_ANDROID_BIONIC
+        IssReadCost::Timer timer{IssReadCost::Image};
+#endif
+        return texture_cache.ResolveReadbacks(addr, size, assume_locks, VideoCore::ReadbackSource::CpuRead);
+    }();
     // tlg: without GPU-modified buffer data there is nothing to download: the guest thread no
     // longer waits for the GPU command thread to reach its request (~3 ms per fault in inFAMOUS,
     // hundreds per second). TLG_FAST_READ_FAULT=0 restores the round trip.

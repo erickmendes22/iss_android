@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "iss_read_cost.h"
 #ifdef ISS_ANDROID_BIONIC
 #include "iss_session.h"
 #endif
@@ -345,6 +346,7 @@ std::tuple<const Buffer*, VAddr, VAddr> BufferCache::GetReadbackWindow(VAddr dev
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks,
                              const std::function<bool()>& prepare) {
+    auto* const sample = IssReadCost::active;
     const s64 queued_at = ReadbackStatsEnabled() ? NowNs() : 0;
     // A native store proof and its ordinary readback share the initial owner command.
     // Never repeat the proof on a stale retry or synchronous fallback.
@@ -356,7 +358,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         }
         return handled;
     };
-    const auto flush_request = [this, device_addr, size, is_write, queued_at, &prepare_once] {
+    const auto flush_request = [this, device_addr, size, is_write, queued_at, &prepare_once, sample] {
+        IssReadCost::Bind bind{sample};
+        IssReadCost::Timer timer{IssReadCost::Fallback};
         if (prepare_once()) return;
         const s64 started_at = queued_at ? NowNs() : 0;
         const auto [arena, window_start, window_end] = GetReadbackWindow(device_addr, size);
@@ -371,6 +375,13 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             r.flush_ns.fetch_add(NowNs() - started_at);
             ReportReadbacks();
         }
+    };
+    const auto queue_flush = [&] {
+        const auto enqueued = IssReadCost::Now(sample);
+        liverpool->SendCommand<true, true>([&] {
+            IssReadCost::Add(sample, IssReadCost::Queue, enqueued);
+            flush_request();
+        });
     };
     if (assume_locks) {
         // A GPU-side thread touched the memory itself: it has to wait for the GPU.
@@ -391,9 +402,15 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         for (unsigned attempt = 0; attempt < max_attempts; ++attempt) {
             if (attempt && queued_at) Readbacks().deferred_retries.fetch_add(1);
             std::shared_ptr<DeferredReadback> readback;
+            const auto enqueued = IssReadCost::Now(sample);
             liverpool->SendCommand<true, true>([&] {
+                IssReadCost::Add(sample, IssReadCost::Queue, enqueued);
+                IssReadCost::Bind bind{sample};
+                IssReadCost::Timer timer{IssReadCost::Owner};
+                if (sample) ++sample->requests;
                 if (prepare_once()) return;
                 readback = StartDeferredReadback(device_addr, size);
+                if (sample && readback && readback->applied.load(std::memory_order_acquire)) ++sample->ready;
                 if (!readback && is_write) {
                     // Nothing to copy back, as when DownloadMemory finds nothing.
                     memory_tracker->MarkRegionAsCpuModified(device_addr, size);
@@ -417,10 +434,17 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                         // the owner instead of waiting its obsolete tick/publication.
                         if (readback->stale.load(std::memory_order_acquire) ||
                             readback->recovered.load(std::memory_order_acquire)) return;
-                        scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                        {
+                            IssReadCost::Timer timer{IssReadCost::GpuWait};
+                            scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                        }
                         if (readback->stale.load(std::memory_order_acquire) ||
                             readback->recovered.load(std::memory_order_acquire)) return;
+                        const auto enqueued_again = IssReadCost::Now(sample);
                         liverpool->SendCommand<true, true>([&] {
+                            IssReadCost::Add(sample, IssReadCost::Queue, enqueued_again);
+                            IssReadCost::Bind bind{sample};
+                            IssReadCost::Timer timer{IssReadCost::Owner};
                             FinishDeferredReadback(*readback, false);
                         });
                     });
@@ -452,7 +476,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 if (queued_at) {
                     Readbacks().stale.fetch_add(1);
                 }
-                liverpool->SendCommand<true, true>(flush_request);
+                queue_flush();
             } else if (readback) {
                 if (queued_at) {
                     Readbacks().deferred_ns.fetch_add(NowNs() - queued_at);
@@ -464,7 +488,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             return;
         }
     } else {
-        liverpool->SendCommand<true, true>(flush_request);
+        queue_flush();
     }
 }
 
@@ -1358,6 +1382,11 @@ bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, b
 }
 
 bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
+    IssReadCost::Timer timer{IssReadCost::Capture};
+    if (auto* sample = IssReadCost::active) {
+        sample->copies += readback.copies.size();
+        sample->bytes += readback.snapshot_size;
+    }
     // Only the Relaxed cache owner publishes these reads. No device pointer is read
     // until the old submission (including its HOST_READ barrier) has completed.
     if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
@@ -1682,6 +1711,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
 }
 
 bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) {
+    IssReadCost::Timer timer{IssReadCost::Publish};
     if (wait) {
         scheduler.GetWorkSemaphore()->Wait(readback.tick);
     }
