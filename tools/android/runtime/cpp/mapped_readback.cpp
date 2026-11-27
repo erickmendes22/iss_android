@@ -31,7 +31,7 @@ struct Settings {
     bool IsDirectMemoryAccessEnabled(){return dma;}
 } EmulatorSettings;
 struct Stats {
-    std::atomic<u64> wide_attempts{},wide_neighbors{},mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
+    std::atomic<u64> mixed_pages_skipped{},wide_attempts{},wide_neighbors{},mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
         mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
         mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
@@ -323,6 +323,19 @@ int main(int argc,char** argv) {
         assert(c.gpu_modified_ranges.Intersects(neighbor,16)==(mode!="spread"));
         assert(r->CopiesTouchPages(neighbor,neighbor+4096)==(mode=="spread"));
         assert(c.scheduler.flushes==0 && c.runtime.copies==0 && c.scheduler.sem.waited==0);
+        return 0;
+    }
+    if(mode=="mixed_window") {
+        const VAddr later=base+0x9000;
+        c.tracker.ranges.emplace_back(later,16);
+        c.gpu_modified_ranges.Add(later,16);c.write_ticks.Write(later,16,9);
+        auto r=c.StartDeferredReadback(base+0x3ff0,4);
+        assert(r && r->mapped && r->tick==7 && !r->applied);
+        assert(c.FinishDeferredReadback(*r,true));
+        assert(c.mem.published.size()==48 && c.mem.published.contains(base+0x4100));
+        assert(!c.mem.published.contains(later) && c.gpu_modified_ranges.Intersects(later,16));
+        assert(c.tracker.IsRegionGpuModified(later,16) && c.scheduler.sem.waited==7);
+        assert(Readbacks().mixed_pages_skipped==1 && c.runtime.copies==0);
         return 0;
     }
     if(mode.starts_with("priority_")) {

@@ -7,14 +7,13 @@
 #include <cstdio>
 #include <chrono>
 #include "tlg_quality.h"
-#include "iss_readback_trace.h"
 
 namespace IssSession {
 inline std::atomic<int32_t*> guest_level{nullptr};
 inline std::atomic<uint64_t> gpu_busy_ns{0};
 inline std::atomic<bool> gpu_timing{false}, hybrid_reads{false};
 inline std::atomic<uint64_t> small_merged{}, small_fallback{}, grown_images{}, gpu_grown_images{};
-inline std::atomic<uint64_t> predicate_downloads{}, feedback_binds{};
+inline std::atomic<uint64_t> predicate_downloads{};
 
 inline std::atomic<uint64_t> read_fault_samples{0}, read_fault_ns{0};
 
@@ -101,9 +100,6 @@ public:
                     static_cast<unsigned long long>(grown_images.exchange(0)),
                     static_cast<unsigned long long>(gpu_grown_images.exchange(0)),
                     static_cast<unsigned long long>(predicate_downloads.exchange(0)));
-        std::printf("FEEDBACK_BINDS selected=%llu\n",
-                    static_cast<unsigned long long>(feedback_binds.exchange(0)));
-        IssReadbackTrace::Report();
         const auto busy = gpu_busy_ns.exchange(0, std::memory_order_relaxed);
         if (gpu_timing.load() && busy)
             std::printf("GPU_FRAME_MS avg=%.2f busy_pct=%.1f frames=%u\n",

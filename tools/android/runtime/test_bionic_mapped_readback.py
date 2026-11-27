@@ -130,7 +130,7 @@ int main() {
                  "priority_inflight", "priority_ready", "priority_neighbor_ready", "priority_same_tick",
                  "priority_current", "priority_join", "priority_join_ready", "priority_coherent", "priority_noncoherent",
                  "hybrid_stage_write", "hybrid_stage_gap", "hybrid_targeted_pages", "hybrid_batching",
-                 "hybrid_map_sparse_join", "hybrid_map_ready", "hybrid_map_currentready", "hybrid_map_partial_note",
+                 "hybrid_map_mixed_window", "hybrid_map_sparse_join", "hybrid_map_ready", "hybrid_map_currentready", "hybrid_map_partial_note",
                  "hybrid_map_spread", "hybrid_map_spread_inflight", "hybrid_map_spread_hole", "hybrid_map_spread_newer", "hybrid_map_mapfail", "hybrid_map_hole")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))

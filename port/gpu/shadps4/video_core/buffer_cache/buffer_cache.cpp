@@ -219,6 +219,7 @@ struct ReadbackStats {
     /// Deferred readbacks: recorded, joined, applied by guest threads, stale (fell back to the
     /// download), guest time from the request to the copy applied, bytes copied.
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
+    std::atomic<u64> mixed_pages_skipped{};
     std::atomic<u64> shared_completions{0}, wide_attempts{0}, wide_neighbors{0};
     std::atomic<u64> deferred_retries{0}, retry_applied{0};
     std::atomic<u64> cpu_store_applied{0}, cpu_store_fallback{0},
@@ -299,6 +300,8 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_prefetch_narrowed.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_wider_wait_bypassed.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_coherent_skipped.exchange(0)));
+    std::printf("  hybrid mixed prefetch: %llu unfinished neighbor pages skipped\n",
+                static_cast<unsigned long long>(r.mixed_pages_skipped.exchange(0)));
     std::printf("  hybrid mapped batches: %llu attempted, %llu with extra blocks recorded\n",
                 static_cast<unsigned long long>(r.wide_attempts.exchange(0)),
                 static_cast<unsigned long long>(r.wide_neighbors.exchange(0)));
@@ -625,8 +628,7 @@ void PrintBufferStats() {
 } // namespace
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
-                                                        bool is_written, bool is_texel_buffer,
-                                                        bool watch_guest_read) {
+                                                        bool is_written, bool is_texel_buffer) {
     if (is_written) {
         NoteGpuWriteForEager(device_addr, size);
     }
@@ -669,7 +671,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
     const u64 uploaded_before = TlgStats::buffer_upload_bytes.load(std::memory_order_relaxed);
-    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer, watch_guest_read);
+    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
     if (stats) {
         auto& region = Stats().regions[RegionKey(device_addr)];
         ++region.arena_count;
@@ -1393,8 +1395,18 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
     readback.mapped_snapshot.resize(readback.snapshot_size);
     const auto device = instance.GetDevice();
     const u64 atom = instance.NonCoherentAtomSize();
+    // Both lists are built in increasing snapshot destination order. A span
+    // may cross a copy boundary and a copy may cross residency allocations.
+    size_t first_copy = 0;
     for (const auto& span : readback.mapped_spans) {
-        for (const auto& copy : readback.publication_copies) {
+        while (first_copy < readback.publication_copies.size()) {
+            const auto& copy = readback.publication_copies[first_copy];
+            if (copy.dstOffset + copy.size > span.destination) break;
+            ++first_copy;
+        }
+        for (size_t i = first_copy; i < readback.publication_copies.size(); ++i) {
+            const auto& copy = readback.publication_copies[i];
+            if (copy.dstOffset >= span.destination + span.size) break;
             const u64 begin = std::max(span.destination, copy.dstOffset);
             const u64 end = std::min(span.destination + span.size, copy.dstOffset + copy.size);
             if (begin >= end) continue;
@@ -1512,6 +1524,11 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         !deferred_count.load(std::memory_order_acquire) && !merged_count.load(std::memory_order_acquire) &&
         ((window_start < prefetch_start && gpu_modified_ranges.Intersects(window_start, prefetch_start - window_start)) ||
          (prefetch_end < window_end && gpu_modified_ranges.Intersects(prefetch_end, window_end - prefetch_end)));
+    // A later producer anywhere in a 64 KiB window used to discard all its
+    // eligible neighbors. Limit selection by page before collecting dirty bytes.
+    const bool mixed_window = RegionManager::HybridReadProtectionEnabled() && try_mapped &&
+        wait_tick_limit && wait_tick_limit < scheduler.CurrentTick() &&
+        write_ticks.Latest(prefetch_start, prefetch_end - prefetch_start) > wait_tick_limit;
     enum Attempt { Wide, Prefetch, Required, Staging };
     for (int attempt = batch_window ? Wide : try_mapped ? Prefetch : Staging; attempt <= Staging; ++attempt) {
         const bool mapped_attempt = attempt != Staging;
@@ -1551,6 +1568,29 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                         readback->copies[i].dstOffset += dest_offset;
                     }
                 });
+        }
+        if (attempt == Prefetch && mixed_window) {
+            selected = true;
+            u64 eligible_start = start;
+            unsigned skipped = 0;
+            const auto collect = [&](VAddr lo, VAddr hi) {
+                if (lo >= hi) return;
+                const auto first = readback->copies.size();
+                const auto offset = total_size_bytes;
+                total_size_bytes += CollectDownloads(arena, lo, hi - lo, readback->copies);
+                for (auto i = first; i < readback->copies.size(); ++i)
+                    readback->copies[i].dstOffset += offset;
+            };
+            for (VAddr page = start; page < end; page += 4096) {
+                if (page < required_end && page + 4096 > required_start) continue;
+                const u64 tick = write_ticks.Latest(page, 4096);
+                if (tick <= wait_tick_limit || scheduler.GetWorkSemaphore()->IsFree(tick)) continue;
+                collect(eligible_start, page);
+                eligible_start = page + 4096;
+                ++skipped;
+            }
+            collect(eligible_start, end);
+            if (skipped && ReadbackStatsEnabled()) Readbacks().mixed_pages_skipped.fetch_add(skipped);
         }
         if (attempt == Wide) {
             // Check independent 64 KiB blocks. A newer write in a distant block
@@ -2065,13 +2105,13 @@ void BufferCache::FlushMergedWrites(const Buffer* arena, VAddr device_addr, u64 
 }
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
-                                    bool is_written, bool is_texel_buffer, bool watch_guest_read) {
+                                    bool is_written, bool is_texel_buffer) {
     FlushMergedWrites(arena, device_addr, size);
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};
     memory_tracker->ForEachUploadRange(
-        device_addr, size, is_written, watch_guest_read,
+        device_addr, size, is_written,
         [&](u64 addr, u64 size) {
             copies.emplace_back(total_size_bytes, addr, size);
             total_size_bytes += size;

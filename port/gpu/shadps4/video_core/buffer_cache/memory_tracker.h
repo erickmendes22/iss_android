@@ -173,7 +173,7 @@ public:
     }
 
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
-    void ForEachUploadRange(VAddr query_cpu_range, u64 query_size, bool is_written, bool watch_guest_read, auto&& func,
+    void ForEachUploadRange(VAddr query_cpu_range, u64 query_size, bool is_written, auto&& func,
                             auto&& on_upload) {
         IteratePages<true>(query_cpu_range, query_size,
                            [&func, is_written](RegionManager* manager, u64 offset, size_t size) {
@@ -198,9 +198,9 @@ public:
             return;
         }
         IteratePages<false>(query_cpu_range, query_size,
-                            [watch_guest_read](RegionManager* manager, u64 offset, size_t size) {
+                            [&func, is_written](RegionManager* manager, u64 offset, size_t size) {
                                 manager->template ChangeRegionState<Type::GPU, true>(
-                                    manager->GetCpuAddr() + offset, size, watch_guest_read);
+                                    manager->GetCpuAddr() + offset, size);
                                 manager->lock.unlock();
                             });
     }
