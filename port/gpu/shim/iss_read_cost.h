@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <map>
+#include <vector>
 
 namespace IssReadCost {
 using Clock = std::chrono::steady_clock;
@@ -142,15 +144,13 @@ struct FaultWindow {
 inline FaultWindow faults;
 inline std::mutex fault_lock;
 
-inline std::atomic<unsigned long long> long_predecessors{}, idle_checks{}, idle_submits{};
-// The immediate-batch policy is shared with 0.2.20. After a long predecessor,
-// keep one later opportunity to overlap recording with an otherwise idle GPU.
+// Only the immediately following batch gets an opportunity. Work is counted
+// by the scheduler in draws and dispatches. A normal submission expires it.
 class FeedbackSubmit {
     std::atomic<unsigned long long> armed_tick{};
     // Only accessed by the GPU command owner.
     unsigned long long boundary_tick{}, last_armed{}, last_backlog{};
     unsigned boundary_work{};
-    unsigned long long recovery_first{}, recovery_probe_tick{};
 public:
     void NoteBoundary(unsigned long long tick, unsigned work) {
         boundary_tick = tick;
@@ -164,9 +164,7 @@ public:
         faults.armed += tick == last_armed;
         faults.backlog += tick == last_backlog;
     }
-    void Arm(unsigned long long tick, unsigned long long prior_work = 0) {
-        recovery_first = prior_work >= 1024 ? tick : 0;
-        if (recovery_first) long_predecessors.fetch_add(1, std::memory_order_relaxed);
+    void Arm(unsigned long long tick) {
         last_armed = tick;
         armed_tick.store(tick, std::memory_order_relaxed);
         forced_reads.fetch_add(1, std::memory_order_relaxed);
@@ -176,19 +174,6 @@ public:
                     PreviousDone previous_done) {
         if (!normal_limit || work >= normal_limit ||
             work < std::max(256u, normal_limit / 2)) return false;
-        // Restrict recovery to the next eight timeline submissions (the
-        // scheduler's in-flight window). Query at most once per candidate.
-        if (recovery_first && tick > recovery_first && tick - recovery_first < 8 &&
-            recovery_probe_tick != tick) {
-            recovery_probe_tick = tick;
-            idle_checks.fetch_add(1, std::memory_order_relaxed);
-            if (previous_done(tick - 1)) {
-                recovery_first = 0;
-                idle_submits.fetch_add(1, std::memory_order_relaxed);
-                early_submits.fetch_add(1, std::memory_order_relaxed);
-                return true;
-            }
-        }
         auto expected = tick;
         if (!tick || !armed_tick.compare_exchange_strong(expected, 0, std::memory_order_relaxed))
             return false;
@@ -198,16 +183,36 @@ public:
             backlog_skips.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        recovery_first = 0;
         early_submits.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 };
+// Timestamp deltas are bottom-of-pipe completion intervals; adjacent GPU work may overlap.
+using ShaderKey = std::array<unsigned long long, 3>; // kind, VS/CS, FS
+struct ShaderTime { unsigned long long ns{}, samples{}; };
+inline std::mutex shader_lock;
+inline std::map<ShaderKey, ShaderTime> predecessor_shaders;
+inline void RecordPredecessor(ShaderKey key, unsigned long long ns) {
+    std::scoped_lock guard{shader_lock};
+    auto& time = predecessor_shaders[key];
+    time.ns += ns;
+    ++time.samples;
+}
 inline void Report(unsigned frames) {
+    std::map<ShaderKey, ShaderTime> measured;
+    { std::scoped_lock guard{shader_lock}; measured.swap(predecessor_shaders); }
+    std::vector<std::pair<ShaderKey, ShaderTime>> ranked(measured.begin(), measured.end());
+    const auto count = std::min<size_t>(8, ranked.size());
+    std::partial_sort(ranked.begin(), ranked.begin()+count, ranked.end(),
+        [](const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
+    constexpr std::array kinds{"draw", "draw_indirect", "dispatch", "dispatch_indirect"};
+    for (size_t i=0; i<count; ++i) {
+        const auto& [key,time] = ranked[i];
+        std::printf("READBACK_PRIOR_SHADER kind=%s vs_cs=%llx fs=%llx samples=%llu interval_us_sum=%.1f\n",
+                    kinds[key[0]], key[1], key[2], time.samples, time.ns / 1000.0);
+    }
     std::printf("FEEDBACK_SUBMIT forced_reads=%llu early=%llu backlog_skip=%llu\n",
                 forced_reads.exchange(0), early_submits.exchange(0), backlog_skips.exchange(0));
-    std::printf("READBACK_QUEUE long_predecessors=%llu idle_checks=%llu idle_submits=%llu\n",
-                long_predecessors.exchange(0), idle_checks.exchange(0), idle_submits.exchange(0));
     FaultWindow snapshot;
     { std::scoped_lock guard{fault_lock}; snapshot = faults; faults = {}; }
     constexpr std::array bins{"0_127", "128_255", "256_511", "512_plus"};

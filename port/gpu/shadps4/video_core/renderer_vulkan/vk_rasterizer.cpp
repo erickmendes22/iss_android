@@ -1384,6 +1384,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 first_instance = instance_offset;
     const u64 fast_bind_tick = scheduler.CurrentTick();
     const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
+#ifdef ISS_ANDROID_BIONIC
+    const auto* profile_ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    const int profile_query = scheduler.BeginReadbackOp({0, vs_info.pgm_hash, profile_ps ? profile_ps->pgm_hash : 0});
+#endif
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         const auto draw = [&] {
             if (is_indexed) {
@@ -1400,6 +1404,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             draw();
         }
     });
+#ifdef ISS_ANDROID_BIONIC
+    scheduler.EndReadbackOp(profile_query);
+#endif
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
         FrameCapture::Draw(vs_info.pgm_hash, ps ? ps->pgm_hash : 0, num_indices, num_instances);
@@ -1597,6 +1604,10 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
     const u64 fast_bind_tick = scheduler.CurrentTick();
     const u64 fast_bind_epoch = scheduler.DescriptorStreamEpoch();
+#ifdef ISS_ANDROID_BIONIC
+    const auto* profile_ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    const int profile_query = scheduler.BeginReadbackOp({1, pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash, profile_ps ? profile_ps->pgm_hash : 0});
+#endif
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         for (const vk::Pipeline bound : {handle, square}) {
             if (!bound) {
@@ -1617,6 +1628,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
             }
         }
     });
+#ifdef ISS_ANDROID_BIONIC
+    scheduler.EndReadbackOp(profile_query);
+#endif
     DebugState.IncDrawCall();
 
     ResetBindings(false);
@@ -1761,6 +1775,9 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
+#ifdef ISS_ANDROID_BIONIC
+    const int profile_query = scheduler.BeginReadbackOp({2, cs.pgm_hash, 0});
+#endif
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
@@ -1771,6 +1788,9 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
             Scheduler::RecordFullBarrier(cmdbuf);
         }
     });
+#ifdef ISS_ANDROID_BIONIC
+    scheduler.EndReadbackOp(profile_query);
+#endif
     DebugState.IncDispatch();
     scheduler.CountWork(true);
 
@@ -1843,6 +1863,9 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const auto bind = ComputeBind(pipeline);
     const vk::Buffer args = buffer->Handle();
     const u64 args_offset = base;
+#ifdef ISS_ANDROID_BIONIC
+    const int profile_query = scheduler.BeginReadbackOp({3, pipeline->GetStage(Shader::SwStage::Compute).pgm_hash, 0});
+#endif
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (Scheduler::FullBarriers()) {
             Scheduler::RecordFullBarrier(cmdbuf);
@@ -1853,6 +1876,9 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
             Scheduler::RecordFullBarrier(cmdbuf);
         }
     });
+#ifdef ISS_ANDROID_BIONIC
+    scheduler.EndReadbackOp(profile_query);
+#endif
     DebugState.IncDispatch();
     scheduler.CountWork(true);
 

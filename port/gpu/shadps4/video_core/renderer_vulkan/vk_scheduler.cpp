@@ -33,11 +33,25 @@ std::mutex Scheduler::submit_mutex;
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
 #ifdef ISS_ANDROID_BIONIC
-    if (threaded_recording && IssBionicPerf::Enabled()) { // Vulkan timestamps are diagnostic work on every submission
+    const char* hybrid = std::getenv("TLG_ISS_HYBRID_READ_PROTECT");
+    const bool profile_reads = hybrid && hybrid[0] == '1';
+    if (threaded_recording && (IssBionicPerf::Enabled() || profile_reads)) { // Vulkan timestamps are diagnostic work on every submission
         const auto physical = instance.GetPhysicalDevice();
         const auto families = physical.getQueueFamilyProperties();
         const u32 bits = families[instance.GetGraphicsQueueFamilyIndex()].timestampValidBits;
         if (bits) {
+            timestamp_mask = ~u64{0} >> (64 - bits);
+            timestamp_ns = physical.getProperties().limits.timestampPeriod;
+            if (profile_reads) {
+                const vk::QueryPoolCreateInfo profile{.queryType = vk::QueryType::eTimestamp,
+                    .queryCount = 2 * ProfileOps * SessionQueryPairs};
+                auto [status, queries] = instance.GetDevice().createQueryPoolUnique(profile);
+                if (status == vk::Result::eSuccess) profile_queries = std::move(queries);
+                std::printf("READBACK_PRIOR_PROFILE enabled=%d stride=512 slots_per_batch=%u\n",
+                            profile_queries ? 1 : 0, ProfileOps);
+            }
+        }
+        if (bits && IssBionicPerf::Enabled()) {
             const vk::QueryPoolCreateInfo info{.queryType = vk::QueryType::eTimestamp,
                                                .queryCount = 2 * SessionQueryPairs};
             auto [result, pool] = instance.GetDevice().createQueryPoolUnique(info);
@@ -109,7 +123,7 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
 
 Scheduler::~Scheduler() {
 #ifdef ISS_ANDROID_BIONIC
-    if (session_queries) work_semaphore.Wait(CurrentTick() - 1);
+    if (session_queries || profile_queries) work_semaphore.Wait(CurrentTick() - 1);
 #endif
     if (parallel_recording) {
         SyncRecording();
@@ -723,6 +737,64 @@ void Scheduler::PopPendingOperations() {
     popping_pending_ops = false;
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void Scheduler::RotateReadbackQueries() {
+    const u64 tick = CurrentTick();
+    const u32 slot = tick % SessionQueryPairs;
+    auto& batch = profile_batches[slot];
+    const u32 base = 2 * ProfileOps * slot;
+    if (batch.pending_at_fault && batch.samples) {
+        std::array<u64, 2 * ProfileOps> values{};
+        const auto result = instance.GetDevice().getQueryPoolResults(*profile_queries, base,
+            2 * batch.samples, sizeof(values), values.data(), sizeof(u64), vk::QueryResultFlagBits::e64);
+        if (result == vk::Result::eSuccess) {
+            for (u32 i=0; i<batch.samples; ++i) {
+                const u64 elapsed = (values[2*i+1] - values[2*i]) & timestamp_mask;
+                IssReadCost::RecordPredecessor(batch.keys[i], static_cast<u64>(elapsed * timestamp_ns));
+            }
+        }
+    }
+    batch = {};
+    batch.tick = tick;
+    current_cmdbuf.resetQueryPool(*profile_queries, base, 2 * ProfileOps);
+}
+
+int Scheduler::BeginReadbackOp(IssReadCost::ShaderKey key) {
+    if (!profile_queries || IsNativeSecondaryRendering()) return -1;
+    const u64 tick = CurrentTick();
+    const u32 slot = tick % SessionQueryPairs;
+    auto& batch = profile_batches[slot];
+    const u32 ordinal = batch.ordinal++;
+    const u32 group = ordinal / 512;
+    if (group >= ProfileOps) return -1;
+    // Vary the sampled position between submissions and between blocks.
+    const u32 offset = (u32(tick * 2654435761u + group * 2246822519u) >> 23);
+    if (ordinal % 512 != offset) return -1;
+    const u32 sample = batch.samples++;
+    batch.keys[sample] = key;
+    const u32 index = 2 * (slot * ProfileOps + sample);
+    Record([pool=*profile_queries, index](vk::CommandBuffer cmdbuf) {
+        cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, pool, index);
+    });
+    return static_cast<int>(index);
+}
+
+void Scheduler::EndReadbackOp(int query) {
+    if (query < 0) return;
+    Record([pool=*profile_queries, index=u32(query+1)](vk::CommandBuffer cmdbuf) {
+        cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, pool, index);
+    });
+}
+
+void Scheduler::TagReadbackPrior(u64 producer) {
+    if (!profile_queries || producer <= 1) return;
+    const auto prior = producer - 1;
+    auto& batch = profile_batches[prior % SessionQueryPairs];
+    if (batch.tick == prior && batch.samples && !batch.pending_at_fault && !IsFree(prior))
+        batch.pending_at_fault = true;
+}
+#endif
+
 void Scheduler::AllocateWorkerCommandBuffers() {
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
@@ -732,6 +804,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     Check(current_cmdbuf.begin(begin_info));
 
 #ifdef ISS_ANDROID_BIONIC
+    if (profile_queries) RotateReadbackQueries();
     if (session_queries) {
         const u64 tick = CurrentTick();
         const u32 index = 2 * (tick % SessionQueryPairs);

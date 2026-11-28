@@ -84,7 +84,7 @@ struct Semaphore {
     void Complete(u64 tick=1) {std::lock_guard lock(mutex);complete_tick=std::max(complete_tick,tick);cv.notify_all();}
 };
 struct RegionManager {static bool HybridReadProtectionEnabled(){return true;}};
-struct Scheduler {IssReadCost::FeedbackSubmit feedback_submit; unsigned WorkSinceSubmit(){return 300;} u64 CurrentTick(){return 1;} IssReadCost::Submission ReadbackSubmission(u64){return {};} Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
+struct Scheduler {IssReadCost::FeedbackSubmit feedback_submit; void TagReadbackPrior(u64){} unsigned WorkSinceSubmit(){return 300;} u64 CurrentTick(){return 1;} IssReadCost::Submission ReadbackSubmission(u64){return {};} Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
 struct Tracker {
     Queue* queue;std::mutex mutex;bool gpu=true,cpu=false;unsigned marks=0;
     bool IsRegionGpuModified(VAddr,u64){std::lock_guard lock(mutex);return gpu;}

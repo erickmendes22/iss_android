@@ -1033,6 +1033,9 @@ public:
 
     /// Returns the scheduler timeline semaphore.
 #ifdef ISS_ANDROID_BIONIC
+    int BeginReadbackOp(IssReadCost::ShaderKey key);
+    void EndReadbackOp(int query);
+    void TagReadbackPrior(u64 producer);
     IssReadCost::FeedbackSubmit feedback_submit;
     IssReadCost::Submission ReadbackSubmission(u64 tick) { return readback_submissions.Find(tick, work_semaphore.KnownGpuTick()); }
 #endif
@@ -1088,6 +1091,16 @@ private:
     Semaphore work_semaphore;
 #ifdef ISS_ANDROID_BIONIC
     static constexpr u32 SessionQueryPairs = 16; // more than the eight in-flight submissions
+    static constexpr u32 ProfileOps = 4;
+    struct OpBatch {
+        u64 tick{};
+        u32 ordinal{}, samples{};
+        bool pending_at_fault{};
+        std::array<IssReadCost::ShaderKey, ProfileOps> keys{};
+    };
+    vk::UniqueQueryPool profile_queries;
+    std::array<OpBatch, SessionQueryPairs> profile_batches{};
+    void RotateReadbackQueries();
     vk::UniqueQueryPool session_queries;
     u64 timestamp_mask{}, previous_end{};
     double timestamp_ns{};

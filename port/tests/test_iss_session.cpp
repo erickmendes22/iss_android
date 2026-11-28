@@ -49,21 +49,6 @@ int main() {
     assert(faults.counts[2][3] == 1 && faults.counts[3][0] == 2);
     assert(faults.operations == 2010 && faults.armed == 1 && faults.backlog == 1);
     assert(WorkBin(127)==0 && WorkBin(128)==1 && WorkBin(256)==2 && WorkBin(512)==3);
-    FeedbackSubmit recovery;
-    unsigned probes = 0;
-    auto complete = [&](auto tick) { ++probes; return tick == 12; };
-    recovery.Arm(10, 1024);
-    assert(!recovery.AtBoundary(10, 512, 1024, complete)); // immediate attempt busy
-    assert(!recovery.AtBoundary(11, 511, 1024, complete));
-    assert(!recovery.AtBoundary(11, 512, 1024, complete));
-    assert(!recovery.AtBoundary(11, 768, 1024, complete) && probes == 2);
-    assert(recovery.AtBoundary(13, 512, 1024, complete));
-    assert(!recovery.AtBoundary(14, 512, 1024, complete) && probes == 3);
-    recovery.Arm(20, 1024);
-    assert(!recovery.AtBoundary(28, 512, 1024, complete) && probes == 3);
-    recovery.Arm(30, 1023);
-    assert(!recovery.AtBoundary(31, 512, 1024, complete) && probes == 3);
-    assert(idle_submits == 1 && idle_checks == 2);
     SubmissionHistory history;
     history.Record(3, 12, 2);
     history.Record(4, 9, 3);
