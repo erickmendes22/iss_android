@@ -423,13 +423,16 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 #endif
                 readback = StartDeferredReadback(device_addr, size);
 #ifdef ISS_ANDROID_BIONIC
-                if (!is_write && readback && readback->mapped && readback->tick == open_tick &&
-                    RegionManager::HybridReadProtectionEnabled()) {
+                const bool forced = !is_write && readback && readback->mapped &&
+                    readback->tick == open_tick && RegionManager::HybridReadProtectionEnabled();
+                if (readback && (sample || forced)) {
+                    submission = scheduler.ReadbackSubmission(readback->tick);
+                }
+                if (forced) {
                     scheduler.feedback_submit.NoteForced(open_tick, open_work);
-                    scheduler.feedback_submit.Arm(open_tick + 1);
+                    scheduler.feedback_submit.Arm(open_tick + 1, submission.prior_work);
                 }
                 if (sample && readback) {
-                    submission = scheduler.ReadbackSubmission(readback->tick);
                     origin = IssReadCost::Classify(readback->mapped, readback->tick, open_tick);
                 }
 #endif
